@@ -21,16 +21,16 @@ st.set_page_config(
 LEGEND_BOTTOM = dict(
     orientation="h",
     yanchor="top",
-    y=-0.3,
+    y=-0.25,
     xanchor="center",
     x=0.5
 )
 
-# 2. Carga de opciones iniciales (Manejo de Nulos)
+# 2. Carga de universos para filtros (Manejo de Nulos)
 @st.cache_data
-def get_filter_options():
+def get_filter_universes():
     con = duckdb.connect()
-    df_opt = con.execute("""
+    df = con.execute("""
         SELECT DISTINCT 
             COALESCE(unidad_regional, 'N/A') as unidad_regional, 
             COALESCE(sucursal, 'N/A') as sucursal, 
@@ -38,14 +38,16 @@ def get_filter_options():
             COALESCE(tipo_cliente, 'N/A') as tipo_cliente 
         FROM 'fpd_gemini.parquet'
     """).df()
-    return df_opt
+    return df
 
-# 3. Función de procesamiento con filtros SQL
+# 3. Función de procesamiento con filtros inteligentes (Vacio = Todos)
 @st.cache_data
 def get_filtered_data(regionales, sucursales, productos, tipos):
-    def list_to_sql(lista):
+    # Función auxiliar para convertir listas a formato SQL
+    def to_sql_list(lista):
         return "'" + "','".join(lista) + "'"
 
+    # Lógica: Si la lista está vacía, no filtramos por ese campo (considera todos)
     query = f"""
     WITH base AS (
         SELECT 
@@ -59,15 +61,16 @@ def get_filtered_data(regionales, sucursales, productos, tipos):
             COALESCE(producto_agrupado, 'N/A') as producto_agrupado
         FROM 'fpd_gemini.parquet'
     ),
-    filtrado_base AS (
+    filtrado AS (
         SELECT * FROM base
-        WHERE unidad_regional IN ({list_to_sql(regionales)})
-          AND sucursal IN ({list_to_sql(sucursales)})
-          AND producto_agrupado IN ({list_to_sql(productos)})
-          AND tipo_cliente IN ({list_to_sql(tipos)})
+        WHERE (tipo_cliente IS NOT NULL) -- Base obligatoria
+        {"AND unidad_regional IN (" + to_sql_list(regionales) + ")" if regionales else ""}
+        {"AND sucursal IN (" + to_sql_list(sucursales) + ")" if sucursales else ""}
+        {"AND producto_agrupado IN (" + to_sql_list(productos) + ")" if productos else ""}
+        {"AND tipo_cliente IN (" + to_sql_list(tipos) + ")" if tipos else ""}
     ),
     final AS (
-        SELECT * FROM filtrado_base 
+        SELECT * FROM filtrado 
         WHERE fecha_dt <= (CURRENT_DATE - INTERVAL 2 MONTH)
           AND fecha_dt IS NOT NULL
     )
@@ -75,41 +78,42 @@ def get_filtered_data(regionales, sucursales, productos, tipos):
         strftime(fecha_dt, '%Y%m') as cosecha_id,
         EXTRACT(YEAR FROM fecha_dt) as anio,
         strftime(fecha_dt, '%m') as mes,
-        origen2,
-        tipo_cliente,
-        sucursal,
+        origen2, tipo_cliente, sucursal,
         COUNT(id_credito) as total_casos,
         SUM(fpd2_num) as fpd2_si,
         SUM(np_num) as np_si
     FROM final
-    GROUP BY 1, 2, 3, 4, 5, 6
+    GROUP BY ALL
     ORDER BY cosecha_id ASC
     """
     return duckdb.query(query).to_df()
 
-# --- INTERFAZ ---
+# --- BARRA LATERAL (FILTROS) ---
+st.sidebar.header("🎯 Filtros de Cartera")
+st.sidebar.markdown("*(Si no seleccionas nada, se calculan todos los valores)*")
+
+opt = get_filter_universes()
+
+sel_reg = st.sidebar.multiselect("📍 Unidad Regional", options=sorted(opt['unidad_regional'].unique()))
+
+# Sucursales dinámicas
+if sel_reg:
+    suc_disp = sorted(opt[opt['unidad_regional'].isin(sel_reg)]['sucursal'].unique())
+else:
+    suc_disp = sorted(opt['sucursal'].unique())
+
+sel_suc = st.sidebar.multiselect("🏠 Sucursal", options=suc_disp)
+sel_prod = st.sidebar.multiselect("📦 Producto", options=sorted(opt['producto_agrupado'].unique()))
+sel_tip = st.sidebar.multiselect("👥 Tipo de Cliente", options=sorted(opt['tipo_cliente'].unique()))
+
+# --- CUERPO PRINCIPAL ---
 st.title("📊 FPD Daily: Dashboard de Riesgo")
-
-# PANEL DE FILTROS EN FILA SUPERIOR (SIN EXPANDER)
-opt = get_filter_options()
-f1, f2, f3, f4 = st.columns(4)
-
-with f1:
-    sel_reg = st.multiselect("📍 Unidad Regional", options=sorted(opt['unidad_regional'].unique()), default=opt['unidad_regional'].unique())
-with f2:
-    suc_disp = opt[opt['unidad_regional'].isin(sel_reg)]['sucursal'].unique()
-    sel_suc = st.multiselect("🏠 Sucursal", options=sorted(suc_disp), default=suc_disp)
-with f3:
-    sel_prod = st.multiselect("📦 Producto", options=sorted(opt['producto_agrupado'].unique()), default=opt['producto_agrupado'].unique())
-with f4:
-    sel_tip = st.multiselect("👥 Tipo Cliente", options=sorted(opt['tipo_cliente'].unique()), default=opt['tipo_cliente'].unique())
-
-st.markdown("---")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📈 Resumen General", "🍇 Análisis de Cosechas", "🏢 Por Sucursal", "📋 Detalle de Datos"])
 
 with tab1:
     try:
+        # Ejecutar consulta con filtros reactivos
         df_raw = get_filtered_data(sel_reg, sel_suc, sel_prod, sel_tip)
         
         if not df_raw.empty:
@@ -140,6 +144,8 @@ with tab1:
             k3.metric("Tasa FPD2", f"{ult['fpd2_rate']:.2f}%")
             k4.metric("Tasa NP", f"{ult['np_rate']:.2f}%")
 
+            st.divider()
+
             # --- FILA 1 (50/50) ---
             c1, c2 = st.columns(2)
             with c1:
@@ -148,7 +154,7 @@ with tab1:
                 fig1.add_trace(go.Scatter(x=df_total['cosecha_id'], y=df_total['fpd2_rate'], mode='lines+markers+text',
                     text=df_total['fpd2_rate'].apply(lambda x: f'{x:.1f}%'), textposition="top center",
                     line=dict(color='#1B4F72', width=4), fill='tozeroy', fillcolor='rgba(27, 79, 114, 0.1)', name='FPD2 Global'))
-                fig1.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, showlegend=True, legend=LEGEND_BOTTOM)
+                fig1.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
                 st.plotly_chart(fig1, use_container_width=True)
 
             with c2:
@@ -192,8 +198,10 @@ with tab1:
 
             # --- RANKINGS ---
             st.subheader(f"🏆 Rankings de Sucursales - Cosecha {ultima_cosecha}")
+            # El ranking se recalcula con los datos ya filtrados por Sidebar
             df_suc_curr = df_raw[df_raw['cosecha_id'] == ultima_cosecha].groupby('sucursal').agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
             df_suc_curr['fpd2_rate'] = (df_suc_curr['fpd2_si'] * 100.0 / df_suc_curr['total_casos'])
+            
             df_suc_prev = df_raw[df_raw['cosecha_id'] == cosecha_ant].groupby('sucursal').agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
             df_suc_prev['fpd2_rate_ant'] = (df_suc_prev['fpd2_si'] * 100.0 / df_suc_prev['total_casos'])
             
@@ -212,9 +220,9 @@ with tab1:
                     st.dataframe(df_rank.sort_values('fpd2_rate', ascending=True).head(10), column_config=conf, hide_index=True, use_container_width=True)
 
     except Exception as e:
-        st.error(f"Error en el dashboard.: {e}")
+        st.error(f"Error en el procesamiento: {e}")
 
-# Pestañas restantes vacías
+# Pestañas restantes
 with tab2: pass
 with tab3: pass
 with tab4: pass
