@@ -140,7 +140,6 @@ with tab1:
         k4.metric("Tasa NP", f"{ult['np_rate']:.2f}%")
         st.divider()
         
-        # Gráficas Fila 1
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Tendencia Global")
@@ -156,7 +155,6 @@ with tab1:
             fig2.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig2, use_container_width=True)
 
-        # Gráficas Fila 2
         c3, c4 = st.columns(2)
         with c3:
             st.subheader("Comparativa Interanual")
@@ -180,7 +178,7 @@ with tab1:
         fig5.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=400, legend=LEGEND_BOTTOM)
         st.plotly_chart(fig5, use_container_width=True)
 
-# --- TAB 2: RESUMEN EJECUTIVO (Lógica Narrativa Dual) ---
+# --- TAB 2: RESUMEN EJECUTIVO (Redacción dentro de cuadros) ---
 with tab2:
     df2 = get_tab2_data()
     if not df2.empty:
@@ -191,42 +189,35 @@ with tab2:
         ult_c = lista_c[-1]
         ant_c = lista_c[-2] if len(lista_c) > 1 else ult_c
         
-        # 2. Rankings por cosecha
-        df_ult_sort = df2[df2['cosecha_id'] == ult_c].sort_values('fpd2_rate')
-        df_ant_sort = df2[df2['cosecha_id'] == ant_c].sort_values('fpd2_rate')
+        # 2. Análisis Mejor/Peor
+        df_u_s = df2[df2['cosecha_id'] == ult_c].sort_values('fpd2_rate')
+        df_a_s = df2[df2['cosecha_id'] == ant_c].sort_values('fpd2_rate')
         
-        # MEJORES (Inicio de la lista)
-        m_u_best = df_ult_sort.iloc[0]
-        m_a_best = df_ant_sort.iloc[0]
+        m_u_b, m_a_b = df_u_s.iloc[0], df_a_s.iloc[0] # Mejores
+        m_u_w, m_a_w = df_u_s.iloc[-1], df_a_s.iloc[-1] # Peores
         
-        # PEORES (Final de la lista)
-        m_u_worst = df_ult_sort.iloc[-1]
-        m_a_worst = df_ant_sort.iloc[-1]
+        # Nombres de meses
+        mes_u = MESES_NOMBRE.get(ult_c[-2:], 'N/A')
+        mes_a = MESES_NOMBRE.get(ant_c[-2:], 'N/A')
         
-        # Nombres de meses para la frase
-        mes_u_nombre = MESES_NOMBRE.get(ult_c[-2:], 'N/A')
-        mes_a_nombre = MESES_NOMBRE.get(ant_c[-2:], 'N/A')
+        # 3. Mostrar Cuadros de Alerta Narrativos
+        col_n1, col_n2 = st.columns(2)
         
-        # 3. Mostrar Resumen Narrativo
-        col_narr1, col_narr2 = st.columns(2)
-        
-        with col_narr1:
-            st.success("🟢 **Desempeño Destacado**")
-            st.markdown(f"""
-                La mejor unidad es **{m_u_best['unidad_regional']}** con un **{m_u_best['fpd2_rate']:.2f}%** en el mes de **{mes_u_nombre}**, 
-                mientras que la mejor unidad en **{mes_a_nombre}** fue **{m_a_best['unidad_regional']}** con un **{m_a_best['fpd2_rate']:.2f}%**.
+        with col_n1:
+            st.success(f"""
+                **Desempeño Destacado:** La mejor unidad es **{m_u_b['unidad_regional']}** con un **{m_u_b['fpd2_rate']:.2f}%** en el mes de **{mes_u}**, 
+                mientras que la mejor unidad en **{mes_a}** fue **{m_a_b['unidad_regional']}** con un **{m_a_b['fpd2_rate']:.2f}%**.
             """)
 
-        with col_narr2:
-            st.error("🔴 **Foco de Atención**")
-            st.markdown(f"""
-                La unidad con mayor riesgo es **{m_u_worst['unidad_regional']}** con un **{m_u_worst['fpd2_rate']:.2f}%** en el mes de **{mes_u_nombre}**, 
-                mientras que la unidad con mayor riesgo en **{mes_a_nombre}** fue **{m_a_worst['unidad_regional']}** con un **{m_a_worst['fpd2_rate']:.2f}%**.
+        with col_n2:
+            st.error(f"""
+                **Foco de Atención:** La unidad con mayor riesgo es **{m_u_w['unidad_regional']}** con un **{m_u_w['fpd2_rate']:.2f}%** en el mes de **{mes_u}**, 
+                mientras que la unidad con mayor riesgo en **{mes_a}** fue **{m_a_w['unidad_regional']}** con un **{m_a_w['fpd2_rate']:.2f}%**.
             """)
         
         st.divider()
         st.subheader(f"📋 Ranking Regional Completo - Cosecha {ult_c}")
-        st.dataframe(df_ult_sort.style.background_gradient(subset=['fpd2_rate'], cmap='YlOrRd').format({'fpd2_rate':'{:.2f}%'}), use_container_width=True, hide_index=True)
+        st.dataframe(df_u_s.style.background_gradient(subset=['fpd2_rate'], cmap='YlOrRd').format({'fpd2_rate':'{:.2f}%'}), use_container_width=True, hide_index=True)
 
 with tab3: st.info("Pestaña Por Sucursal vacía.")
 with tab4: st.info("Pestaña Detalle de Datos vacía.")
