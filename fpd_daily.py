@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # Intentar importar duckdb
 try:
@@ -82,7 +83,6 @@ def get_branch_comparison(target_cosecha, prev_cosecha):
 
 # --- INTERFAZ ---
 st.title("📊 FPD Daily: Monitor de Riesgo")
-st.markdown("Análisis de Cosechas con Comparativa Inter-mensual")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📈 Resumen General", "🍇 Análisis de Cosechas", "🏢 Por Sucursal", "📋 Detalle de Datos"])
 
@@ -91,7 +91,7 @@ with tab1:
         df_detalle = get_main_data()
         
         if not df_detalle.empty:
-            # Consolidar Total
+            # Consolidar datos para la gráfica de comportamiento total
             df_total = df_detalle.groupby('cosecha_id').agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
             df_total['fpd2_rate'] = (df_total['fpd2_si'] * 100.0 / df_total['total_casos'])
             
@@ -100,68 +100,74 @@ with tab1:
             ultima_cosecha = lista_cosechas[-1]
             cosecha_anterior = lista_cosechas[-2] if len(lista_cosechas) > 1 else ultima_cosecha
 
-            # --- SECCIÓN 1: KPIs ---
-            ult = df_total.iloc[-1]
+            # KPIs
             k1, k2, k3 = st.columns(3)
-            k1.metric("Cosecha Actual", ultima_cosecha, delta=f"Vs {cosecha_anterior}", delta_color="off")
-            k2.metric("Créditos Colocados", f"{int(ult['total_casos']):,}")
-            k3.metric("Tasa FPD2 Total", f"{ult['fpd2_rate']:.2f}%")
+            ult = df_total.iloc[-1]
+            k1.metric("Cosecha Actual", ultima_cosecha)
+            k2.metric("Volumen Colocado", f"{int(ult['total_casos']):,}")
+            k3.metric("Tasa FPD2", f"{ult['fpd2_rate']:.2f}%")
 
-            # --- SECCIÓN 2: GRÁFICAS ---
-            col_izq, col_der = st.columns(2)
-            with col_izq:
-                st.subheader("Tendencia Global")
-                fig_total = go.Figure()
-                fig_total.add_trace(go.Scatter(x=df_total['cosecha_id'], y=df_total['fpd2_rate'], mode='lines+markers+text',
-                    text=df_total['fpd2_rate'].apply(lambda x: f'{x:.1f}%'), textposition="top center",
-                    line=dict(color='#1B4F72', width=4), fill='tozeroy', fillcolor='rgba(27,79,114,0.1)', name='Total'))
-                fig_total.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=380)
-                st.plotly_chart(fig_total, use_container_width=True)
+            st.markdown("### Comportamiento Mensual: Volumen vs. Riesgo")
+            
+            # --- GRÁFICA DE COMPORTAMIENTO (DOBLE EJE) ---
+            fig_behavior = make_subplots(specs=[[{"secondary_y": True}]])
 
-            with col_der:
-                st.subheader("Desglose por Origen")
-                fig_orig = px.line(df_detalle, x='cosecha_id', y='fpd2_rate', color='origen2', markers=True,
-                                   text=df_detalle['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
-                                   color_discrete_map={'fisico': '#2E86C1', 'digital': '#CB4335'})
-                fig_orig.update_traces(textposition="top center")
-                fig_orig.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=380)
-                st.plotly_chart(fig_orig, use_container_width=True)
+            # Barras para Volumen
+            fig_behavior.add_trace(
+                go.Bar(x=df_total['cosecha_id'], y=df_total['total_casos'], name="Créditos Colocados",
+                       marker_color='rgba(200, 200, 200, 0.5)', hovertemplate='%{y:,.0f} créditos'),
+                secondary_y=False
+            )
+
+            # Línea para Tasa FPD2
+            fig_behavior.add_trace(
+                go.Scatter(x=df_total['cosecha_id'], y=df_total['fpd2_rate'], name="Tasa FPD2 (%)",
+                           mode='lines+markers+text', text=df_total['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
+                           textposition="top center", line=dict(color='#1B4F72', width=4),
+                           marker=dict(size=8), hovertemplate='%{y:.2f}%'),
+                secondary_y=True
+            )
+
+            fig_behavior.update_layout(
+                hovermode="x unified", plot_bgcolor='white', height=500,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                xaxis=dict(type='category', title="Cosecha (YYYYMM)", showgrid=False)
+            )
+
+            fig_behavior.update_yaxes(title_text="Cantidad de Créditos", secondary_y=False, showgrid=False)
+            fig_behavior.update_yaxes(title_text="Tasa de Incumplimiento (%)", secondary_y=True, ticksuffix="%", 
+                                      range=[0, df_total['fpd2_rate'].max() * 1.5], showgrid=True, gridcolor='#F0F0F0')
+
+            st.plotly_chart(fig_behavior, use_container_width=True)
 
             st.divider()
 
-            # --- SECCIÓN 3: RANKING DE SUCURSALES ---
+            # --- RANKING DE SUCURSALES ---
             st.subheader(f"🏆 Desempeño por Sucursal - Cosecha {ultima_cosecha}")
-            st.caption(f"Comparativo vs. Cosecha anterior ({cosecha_anterior})")
-            
             df_suc = get_branch_comparison(ultima_cosecha, cosecha_anterior)
 
             if not df_suc.empty:
                 col_top, col_bottom = st.columns(2)
-                
-                # Configuración de columnas para las tablas
-                conf_columnas = {
-                    "sucursal": "Sucursal",
-                    "total_casos": "Créditos",
+                conf_cols = {
+                    "sucursal": "Sucursal", "total_casos": "Créditos",
                     "fpd2_rate": st.column_config.NumberColumn(f"% FPD {ultima_cosecha}", format="%.2f%%"),
                     "fpd2_rate_ant": st.column_config.NumberColumn(f"% FPD {cosecha_anterior}", format="%.2f%%")
                 }
 
                 with col_top:
-                    st.markdown("🔴 **Top 10: Mayor FPD (Riesgo Alto)**")
-                    top_10 = df_suc.sort_values('fpd2_rate', ascending=False).head(10)
-                    st.dataframe(top_10, column_config=conf_columnas, hide_index=True, use_container_width=True)
+                    st.markdown("🔴 **Peores 10 (Mayor FPD)**")
+                    st.dataframe(df_suc.sort_values('fpd2_rate', ascending=False).head(10), 
+                                 column_config=conf_cols, hide_index=True, use_container_width=True)
 
                 with col_bottom:
-                    st.markdown("🟢 **Bottom 10: Menor FPD (Riesgo Bajo)**")
-                    bottom_10 = df_suc.sort_values('fpd2_rate', ascending=True).head(10)
-                    st.dataframe(bottom_10, column_config=conf_columnas, hide_index=True, use_container_width=True)
-            else:
-                st.info("No hay suficientes datos comparativos para las sucursales.")
+                    st.markdown("🟢 **Mejores 10 (Menor FPD)**")
+                    st.dataframe(df_suc.sort_values('fpd2_rate', ascending=True).head(10), 
+                                 column_config=conf_cols, hide_index=True, use_container_width=True)
 
     except Exception as e:
-        st.error(f"Error general: {e}")
+        st.error(f"Error en la visualización: {e}")
 
-# --- PESTAÑAS VACÍAS ---
+# Pestañas vacías
 with tab2: pass
 with tab3: pass
 with tab4: pass
