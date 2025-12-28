@@ -20,7 +20,6 @@ st.set_page_config(
 # 2. Procesamiento de datos con DuckDB
 @st.cache_data
 def get_fpd_data():
-    # SQL optimizado para obtener todas las dimensiones necesarias
     query = """
     WITH base AS (
         SELECT 
@@ -60,15 +59,12 @@ with tab1:
         
         if not df_raw.empty:
             # --- AGREGACIONES ---
-            # Total Global
             df_total = df_raw.groupby('cosecha_id').agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
             df_total['fpd2_rate'] = (df_total['fpd2_si'] * 100.0 / df_total['total_casos'])
             
-            # Por Origen
             df_origen = df_raw.groupby(['cosecha_id', 'origen2']).agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
             df_origen['fpd2_rate'] = (df_origen['fpd2_si'] * 100.0 / df_origen['total_casos'])
 
-            # Variables para comparación
             lista_cosechas = sorted(df_total['cosecha_id'].unique())
             ultima_cosecha = lista_cosechas[-1]
             cosecha_ant = lista_cosechas[-2] if len(lista_cosechas) > 1 else ultima_cosecha
@@ -103,7 +99,6 @@ with tab1:
 
             with col2:
                 st.subheader("Desglose por Origen")
-                # Aseguramos que origen2 se vea bien (Fisico/Digital)
                 fig2 = px.line(df_origen, x='cosecha_id', y='fpd2_rate', color='origen2', markers=True,
                                text=df_origen['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
                                color_discrete_sequence=['#2E86C1', '#CB4335'])
@@ -112,7 +107,7 @@ with tab1:
                                    plot_bgcolor='white', height=400, margin=dict(l=10, r=10, t=30, b=10))
                 st.plotly_chart(fig2, use_container_width=True)
 
-            # --- SECCIÓN 3: GRÁFICA DE COMPORTAMIENTO (LINEA COMPLETA) ---
+            # --- SECCIÓN 3: GRÁFICA DE COMPORTAMIENTO (CORREGIDA) ---
             st.subheader("Comportamiento Mes a Mes (FPD2)")
             fig3 = go.Figure()
             fig3.add_trace(go.Scatter(
@@ -121,8 +116,14 @@ with tab1:
                 mode='lines+markers+text',
                 text=df_total['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
                 textposition="top center",
-                line=dict(color='#2C3E50', width=3), # Gris oscuro/profesional
-                marker=dict(size=10, symbol='circle', borderwidth=2, bordercolor='white'),
+                line=dict(color='#2C3E50', width=3),
+                # CORRECCIÓN AQUÍ: Usamos line dentro de marker
+                marker=dict(
+                    size=10, 
+                    symbol='circle', 
+                    color='#2C3E50',
+                    line=dict(width=2, color='white') 
+                ),
                 name='Comportamiento'
             ))
             fig3.update_layout(
@@ -138,7 +139,6 @@ with tab1:
 
             # --- SECCIÓN 4: RANKING SUCURSALES ---
             st.subheader(f"🏆 Desempeño por Sucursal - Cosecha {ultima_cosecha}")
-            # Consulta para el ranking con comparativa
             query_rank = f"""
             SELECT 
                 sucursal,
