@@ -86,10 +86,9 @@ def get_tab1_data(regionales, sucursales, productos, tipos):
     """
     return duckdb.query(query).to_df()
 
-# 4. Función para Tab 2 (Independiente y filtros de exclusión)
+# 4. Función para Tab 2 (Independiente)
 @st.cache_data
 def get_exec_data(field):
-    # Agregamos filtro para nómina en productos y la sucursal específica 999
     query = f"""
     WITH base AS (
         SELECT 
@@ -128,14 +127,13 @@ sel_tip = st.sidebar.multiselect("👥 Tipo Cliente", options=sorted(opt['tipo_c
 st.title("📊 Monitor de Riesgo Crediticio")
 tab1, tab2, tab3, tab4 = st.tabs(["📈 Monitor FPD", "💼 Resumen Ejecutivo", "🏢 Por Sucursal", "📋 Detalle de Datos"])
 
-# --- TAB 1: MONITOR FPD (COMPLETO) ---
+# --- TAB 1: MONITOR FPD ---
 with tab1:
     df1 = get_tab1_data(sel_reg, sel_suc, sel_prod, sel_tip)
     if not df1.empty:
         df_t = df1.groupby('cosecha_id').agg({'total_casos':'sum', 'fpd2_si':'sum', 'np_si':'sum'}).reset_index()
         df_t['fpd2_rate'] = (df_t['fpd2_si'] * 100.0 / df_t['total_casos'])
         df_t['np_rate'] = (df_t['np_si'] * 100.0 / df_t['total_casos'])
-        
         k1, k2, k3, k4 = st.columns(4)
         ult_t1 = df_t.iloc[-1]
         k1.metric("Cosecha Actual", ult_t1['cosecha_id'])
@@ -144,7 +142,7 @@ with tab1:
         k4.metric("Tasa NP", f"{ult_t1['np_rate']:.2f}%")
         st.divider()
 
-        # Fila 1
+        # Aquí van las 5 gráficas del Monitor FPD (manteniendo la integridad de la pestaña 1)
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Tendencia Global")
@@ -158,8 +156,6 @@ with tab1:
             fig2 = px.line(df_o, x='cosecha_id', y='fpd2_rate', color='origen2', markers=True, color_discrete_map={'fisico':'#2E86C1','digital':'#CB4335'})
             fig2.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig2, use_container_width=True)
-
-        # Fila 2
         c3, c4 = st.columns(2)
         with c3:
             st.subheader("Comparativa Interanual")
@@ -175,7 +171,6 @@ with tab1:
             fig4.add_trace(go.Scatter(x=df_t['cosecha_id'], y=df_t['np_rate'], name='% NP', line=dict(color='#D35400', dash='dash')))
             fig4.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig4, use_container_width=True)
-
         st.subheader("Tipo Cliente (Sin Formers)")
         df_tc = df1[df1['tipo_cliente'] != 'Formers'].groupby(['cosecha_id', 'tipo_cliente']).agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
         df_tc['fpd2_rate'] = (df_tc['fpd2_si'] * 100.0 / df_tc['total_casos'])
@@ -183,7 +178,7 @@ with tab1:
         fig5.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=400, legend=LEGEND_BOTTOM)
         st.plotly_chart(fig5, use_container_width=True)
 
-# --- TAB 2: RESUMEN EJECUTIVO (Regionales, Productos y Sucursales) ---
+# --- TAB 2: RESUMEN EJECUTIVO (Actualizado) ---
 with tab2:
     df_reg_all = get_exec_data('unidad_regional')
     df_prod_all = get_exec_data('producto_agrupado')
@@ -202,17 +197,30 @@ with tab2:
             df_u = df[df['cosecha_id'] == ult_c].sort_values('fpd2_rate')
             df_a = df[df['cosecha_id'] == ant_c].sort_values('fpd2_rate')
             
+            # Cuadros de redacción
             c1, c2 = st.columns(2)
             with c1:
                 st.success(f"**{dim_name} - Desempeño Destacado:** La mejor es **{df_u.iloc[0]['dimension']}** con un **{df_u.iloc[0]['fpd2_rate']:.2f}%** en **{mes_u}**, mientras que en **{mes_a}** fue **{df_a.iloc[0]['dimension']}** con un **{df_a.iloc[0]['fpd2_rate']:.2f}%**.")
             with c2:
                 st.error(f"**{dim_name} - Foco de Atención:** La de mayor riesgo es **{df_u.iloc[-1]['dimension']}** con un **{df_u.iloc[-1]['fpd2_rate']:.2f}%** en **{mes_u}**, mientras que en **{mes_a}** fue **{df_a.iloc[-1]['dimension']}** con un **{df_a.iloc[-1]['fpd2_rate']:.2f}%**.")
             
-            df_tab = pd.merge(df_u, df_a[['dimension', 'fpd2_rate']].rename(columns={'fpd2_rate':'rate_ant'}), on='dimension', how='left')
-            st.dataframe(df_tab[['dimension', 'total_casos', 'fpd2_si', 'fpd2_rate', 'rate_ant']].style.background_gradient(subset=['fpd2_rate'], cmap='YlOrRd').format({'fpd2_rate':'{:.2f}%', 'rate_ant':'{:.2f}%'}),
-                         use_container_width=True, hide_index=True, column_config={"dimension":dim_name, "total_casos":"Créditos", "fpd2_si":"FPD Si", "fpd2_rate":f"% {mes_u.capitalize()}", "rate_ant":f"% {mes_a.capitalize()}"})
+            # Preparación de la tabla (Merge de casos y tasas de ambos meses)
+            df_ant_merge = df_a[['dimension', 'fpd2_si', 'fpd2_rate']].rename(columns={'fpd2_si': 'fpd2_si_ant', 'fpd2_rate': 'rate_ant'})
+            df_tab = pd.merge(df_u[['dimension', 'fpd2_si', 'fpd2_rate']], df_ant_merge, on='dimension', how='left')
+            
+            st.dataframe(
+                df_tab.style.background_gradient(subset=['fpd2_rate'], cmap='YlOrRd')
+                .format({'fpd2_rate':'{:.2f}%', 'rate_ant':'{:.2f}%', 'fpd2_si':'{:,}', 'fpd2_si_ant':'{:,}'}),
+                use_container_width=True, hide_index=True, 
+                column_config={
+                    "dimension": dim_name, 
+                    "fpd2_si": f"FPD Casos {mes_u.capitalize()}", 
+                    "fpd2_si_ant": f"FPD Casos {mes_a.capitalize()}", 
+                    "fpd2_rate": f"% {mes_u.capitalize()}", 
+                    "rate_ant": f"% {mes_a.capitalize()}"
+                }
+            )
 
-        # Renderizar las 3 secciones
         render_exec_section(df_reg_all, "📍 Análisis por Unidad Regional", "Regional")
         st.divider()
         render_exec_section(df_prod_all, "📦 Análisis por Producto Agrupado", "Producto")
