@@ -86,16 +86,17 @@ def get_tab1_data(regionales, sucursales, productos, tipos):
     """
     return duckdb.query(query).to_df()
 
-# 4. Función para Tab 2 (Independiente y SIN NOMINAS)
+# 4. Funciones para Tab 2 (Independientes y SIN NOMINAS)
 @st.cache_data
-def get_tab2_data():
-    query = """
+def get_exec_data_by_field(field):
+    """Extrae datos para el resumen ejecutivo por Regional o Producto."""
+    query = f"""
     WITH base AS (
         SELECT 
             TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE) as fecha_dt,
             CASE WHEN fpd2 = 'FPD' THEN 1 ELSE 0 END as fpd2_num,
             id_credito, 
-            COALESCE(unidad_regional, 'N/A') as unidad_regional,
+            COALESCE({field}, 'N/A') as dimension,
             producto_agrupado
         FROM 'fpd_gemini.parquet'
         WHERE UPPER(producto_agrupado) NOT LIKE '%NOMINA%'
@@ -103,7 +104,7 @@ def get_tab2_data():
     SELECT 
         strftime(fecha_dt, '%Y%m') as cosecha_id,
         RIGHT(strftime(fecha_dt, '%Y%m'), 2) as mes_id,
-        unidad_regional,
+        dimension,
         COUNT(id_credito) as total_casos,
         SUM(fpd2_num) as fpd2_si,
         (SUM(fpd2_num) * 100.0 / COUNT(id_credito)) as fpd2_rate
@@ -125,7 +126,7 @@ sel_tip = st.sidebar.multiselect("👥 Tipo Cliente", options=sorted(opt['tipo_c
 st.title("📊 Monitor de Riesgo Crediticio")
 tab1, tab2, tab3, tab4 = st.tabs(["📈 Monitor FPD", "💼 Resumen Ejecutivo", "🏢 Por Sucursal", "📋 Detalle de Datos"])
 
-# --- TAB 1: MONITOR FPD ---
+# --- TAB 1: MONITOR FPD (Manteniendo todas las gráficas) ---
 with tab1:
     df1 = get_tab1_data(sel_reg, sel_suc, sel_prod, sel_tip)
     if not df1.empty:
@@ -139,12 +140,11 @@ with tab1:
         k3.metric("Tasa FPD2", f"{ult_t1['fpd2_rate']:.2f}%")
         k4.metric("Tasa NP", f"{ult_t1['np_rate']:.2f}%")
         st.divider()
-        # Gráficas Fila 1
+        # Gráficas
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Tendencia Global")
-            fig1 = go.Figure(go.Scatter(x=df_t['cosecha_id'], y=df_t['fpd2_rate'], mode='lines+markers+text',
-                text=df_t['fpd2_rate'].apply(lambda x: f'{x:.1f}%'), line=dict(color='#1B4F72', width=4), fill='tozeroy', fillcolor='rgba(27,79,114,0.1)', name='Global'))
+            fig1 = go.Figure(go.Scatter(x=df_t['cosecha_id'], y=df_t['fpd2_rate'], mode='lines+markers+text', text=df_t['fpd2_rate'].apply(lambda x: f'{x:.1f}%'), line=dict(color='#1B4F72', width=4), fill='tozeroy', fillcolor='rgba(27,79,114,0.1)', name='Global'))
             fig1.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, showlegend=True, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig1, use_container_width=True)
         with c2:
@@ -154,7 +154,6 @@ with tab1:
             fig2 = px.line(df_o, x='cosecha_id', y='fpd2_rate', color='origen2', markers=True, color_discrete_map={'fisico':'#2E86C1','digital':'#CB4335'})
             fig2.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig2, use_container_width=True)
-        # Fila 2
         c3, c4 = st.columns(2)
         with c3:
             st.subheader("Comparativa Interanual")
@@ -170,7 +169,6 @@ with tab1:
             fig4.add_trace(go.Scatter(x=df_t['cosecha_id'], y=df_t['np_rate'], name='% NP', line=dict(color='#D35400', dash='dash')))
             fig4.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig4, use_container_width=True)
-        # Fila 3
         st.subheader("Tipo Cliente (Sin Formers)")
         df_tc = df1[df1['tipo_cliente'] != 'Formers'].groupby(['cosecha_id', 'tipo_cliente']).agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
         df_tc['fpd2_rate'] = (df_tc['fpd2_si'] * 100.0 / df_tc['total_casos'])
@@ -178,70 +176,51 @@ with tab1:
         fig5.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=400, legend=LEGEND_BOTTOM)
         st.plotly_chart(fig5, use_container_width=True)
 
-# --- TAB 2: RESUMEN EJECUTIVO (Tabla Comparativa) ---
+# --- TAB 2: RESUMEN EJECUTIVO (Con doble truco de redacción) ---
 with tab2:
-    df2 = get_tab2_data()
-    if not df2.empty:
-        st.header("💼 Resumen Ejecutivo Regional")
-        
-        # 1. Obtener las dos últimas cosechas
-        lista_c = sorted(df2['cosecha_id'].unique())
+    df_reg = get_exec_data_by_field('unidad_regional')
+    df_pro = get_exec_data_by_field('producto_agrupado')
+    
+    if not df_reg.empty:
+        st.header("💼 Análisis Ejecutivo Regional y por Producto")
+        st.caption("Nota: Este resumen excluye productos de NÓMINA y es independiente de filtros laterales.")
+
+        # --- SECCIÓN 1: NARRATIVA REGIONAL ---
+        lista_c = sorted(df_reg['cosecha_id'].unique())
         ult_c = lista_c[-1]
         ant_c = lista_c[-2] if len(lista_c) > 1 else ult_c
-        
-        # 2. Análisis Mejor/Peor
-        df_ult = df2[df2['cosecha_id'] == ult_c].sort_values('fpd2_rate')
-        df_ant = df2[df2['cosecha_id'] == ant_c].sort_values('fpd2_rate')
-        
-        m_u_b, m_a_b = df_ult.iloc[0], df_ant.iloc[0] # Mejores
-        m_u_w, m_a_w = df_ult.iloc[-1], df_ant.iloc[-1] # Peores
-        
-        # Nombres de meses
         mes_u = MESES_NOMBRE.get(ult_c[-2:], 'N/A')
         mes_a = MESES_NOMBRE.get(ant_c[-2:], 'N/A')
-        
-        # 3. Mostrar Cuadros de Alerta
-        cn1, cn2 = st.columns(2)
-        with cn1:
-            st.success(f"""
-                **Desempeño Destacado:** La mejor unidad es **{m_u_b['unidad_regional']}** con un **{m_u_b['fpd2_rate']:.2f}%** en el mes de **{mes_u}**, 
-                mientras que en **{mes_a}** fue **{m_a_b['unidad_regional']}** con un **{m_a_b['fpd2_rate']:.2f}%**.
-            """)
-        with cn2:
-            st.error(f"""
-                **Foco de Atención:** La unidad con mayor riesgo es **{m_u_w['unidad_regional']}** con un **{m_u_w['fpd2_rate']:.2f}%** en el mes de **{mes_u}**, 
-                mientras que en **{mes_a}** fue **{m_a_w['unidad_regional']}** con un **{m_a_w['fpd2_rate']:.2f}%**.
-            """)
-        
-        st.divider()
-        
-        # 4. TABLA COMPARATIVA ACTUAL VS ANTERIOR
-        st.subheader(f"📋 Ranking Regional Completo - Cosecha {ult_c}")
-        
-        # Preparar dataframe para la tabla
-        # Renombramos la columna rate de anterior para el merge
-        df_ant_merge = df_ant[['unidad_regional', 'fpd2_rate']].rename(columns={'fpd2_rate': 'fpd2_rate_ant'})
-        
-        # Merge de los datos actuales con los del mes anterior
-        df_tabla_final = pd.merge(df_ult, df_ant_merge, on='unidad_regional', how='left')
-        
-        # Seleccionamos y renombramos columnas para el usuario
-        df_display = df_tabla_final[['unidad_regional', 'total_casos', 'fpd2_si', 'fpd2_rate', 'fpd2_rate_ant']].copy()
-        
-        column_config = {
-            "unidad_regional": "Unidad Regional",
-            "total_casos": st.column_config.NumberColumn("Créditos", format="%d"),
-            "fpd2_si": st.column_config.NumberColumn("FPD Si", format="%d"),
-            "fpd2_rate": st.column_config.NumberColumn(f"% FPD {mes_u.capitalize()}", format="%.2f%%"),
-            "fpd2_rate_ant": st.column_config.NumberColumn(f"% FPD {mes_a.capitalize()}", format="%.2f%%")
-        }
 
-        st.dataframe(
-            df_display.style.background_gradient(subset=['fpd2_rate'], cmap='YlOrRd'),
-            use_container_width=True, 
-            hide_index=True,
-            column_config=column_config
-        )
+        df_r_u = df_reg[df_reg['cosecha_id'] == ult_c].sort_values('fpd2_rate')
+        df_r_a = df_reg[df_reg['cosecha_id'] == ant_c].sort_values('fpd2_rate')
+        
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            st.success(f"**Regional - Desempeño Destacado:** La mejor unidad es **{df_r_u.iloc[0]['dimension']}** con un **{df_r_u.iloc[0]['fpd2_rate']:.2f}%** en el mes de **{mes_u}**, mientras que en **{mes_a}** fue **{df_r_a.iloc[0]['dimension']}** con un **{df_r_a.iloc[0]['fpd2_rate']:.2f}%**.")
+        with col_r2:
+            st.error(f"**Regional - Foco de Atención:** La unidad con mayor riesgo es **{df_r_u.iloc[-1]['dimension']}** con un **{df_r_u.iloc[-1]['fpd2_rate']:.2f}%** en el mes de **{mes_u}**, mientras que en **{mes_a}** fue **{df_r_a.iloc[-1]['dimension']}** con un **{df_r_a.iloc[-1]['fpd2_rate']:.2f}%**.")
+
+        # Tabla Regional Comparativa
+        df_r_ant = df_r_a[['dimension', 'fpd2_rate']].rename(columns={'fpd2_rate': 'fpd2_rate_ant'})
+        df_r_tab = pd.merge(df_r_u, df_r_ant, on='dimension', how='left')
+        
+        st.subheader(f"📋 Ranking Regional Completo - Cosecha {ult_c}")
+        st.dataframe(df_r_tab[['dimension', 'total_casos', 'fpd2_si', 'fpd2_rate', 'fpd2_rate_ant']].style.background_gradient(subset=['fpd2_rate'], cmap='YlOrRd')
+                     .format({'fpd2_rate':'{:.2f}%', 'fpd2_rate_ant':'{:.2f}%'}), use_container_width=True, hide_index=True,
+                     column_config={"dimension":"Regional", "total_casos":"Créditos", "fpd2_si":"FPD Si", "fpd2_rate":f"% {mes_u.capitalize()}", "fpd2_rate_ant":f"% {mes_a.capitalize()}"})
+
+        st.divider()
+
+        # --- SECCIÓN 2: NARRATIVA POR PRODUCTO (EL NUEVO TRUCO) ---
+        df_p_u = df_pro[df_pro['cosecha_id'] == ult_c].sort_values('fpd2_rate')
+        df_p_a = df_pro[df_pro['cosecha_id'] == ant_c].sort_values('fpd2_rate')
+
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+            st.success(f"**Producto - Desempeño Destacado:** El mejor producto es **{df_p_u.iloc[0]['dimension']}** con un **{df_p_u.iloc[0]['fpd2_rate']:.2f}%** en el mes de **{mes_u}**, mientras que en **{mes_a}** fue **{df_p_a.iloc[0]['dimension']}** con un **{df_p_a.iloc[0]['fpd2_rate']:.2f}%**.")
+        with col_p2:
+            st.error(f"**Producto - Foco de Atención:** El producto con mayor riesgo es **{df_p_u.iloc[-1]['dimension']}** con un **{df_p_u.iloc[-1]['fpd2_rate']:.2f}%** en el mes de **{mes_u}**, mientras que en **{mes_a}** fue **{df_p_a.iloc[-1]['dimension']}** con un **{df_p_a.iloc[-1]['fpd2_rate']:.2f}%**.")
 
 with tab3: st.info("Pestaña Por Sucursal vacía.")
 with tab4: st.info("Pestaña Detalle de Datos vacía.")
