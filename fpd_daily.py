@@ -21,16 +21,16 @@ st.set_page_config(
 LEGEND_BOTTOM = dict(
     orientation="h",
     yanchor="top",
-    y=-0.25,
+    y=-0.3, # Ajustado para dar espacio a etiquetas del eje X
     xanchor="center",
     x=0.5
 )
 
-# 2. Carga inicial con limpieza de Nulos (Solución al TypeError)
+# 2. Carga de opciones para las listas desplegables (filtros)
 @st.cache_data
 def get_filter_options():
     con = duckdb.connect()
-    # Usamos COALESCE para convertir Nulos en 'N/A' y evitar errores al ordenar
+    # Limpiamos nulos desde la base para que el sorted() no falle
     df_opt = con.execute("""
         SELECT DISTINCT 
             COALESCE(unidad_regional, 'N/A') as unidad_regional, 
@@ -41,7 +41,7 @@ def get_filter_options():
     """).df()
     return df_opt
 
-# 3. Función principal de procesamiento filtrado
+# 3. Función principal de datos con filtros aplicados
 @st.cache_data
 def get_filtered_data(regionales, sucursales, productos, tipos):
     def list_to_sql(lista):
@@ -88,20 +88,39 @@ def get_filtered_data(regionales, sucursales, productos, tipos):
     """
     return duckdb.query(query).to_df()
 
-# --- SIDEBAR (FILTROS) ---
+# --- SIDEBAR (FILTROS ESTILO LISTA DESPLEGABLE) ---
 st.sidebar.header("🎯 Filtros de Cartera")
 opt = get_filter_options()
 
-# Ahora sorted() funcionará porque no hay None/Null
-sel_regional = st.sidebar.multiselect("Unidad Regional", options=sorted(opt['unidad_regional'].unique()), default=opt['unidad_regional'].unique())
+# Usamos multiselect que actúa como lista desplegable con búsqueda
+sel_regional = st.sidebar.multiselect(
+    "🌍 Unidad Regional", 
+    options=sorted(opt['unidad_regional'].unique()), 
+    default=opt['unidad_regional'].unique(),
+    help="Selecciona una o varias regiones"
+)
 
-sucursales_disponibles = opt[opt['unidad_regional'].isin(sel_regional)]['sucursal'].unique()
-sel_sucursal = st.sidebar.multiselect("Sucursal", options=sorted(sucursales_disponibles), default=sucursales_disponibles)
+suc_disp = opt[opt['unidad_regional'].isin(sel_regional)]['sucursal'].unique()
+sel_sucursal = st.sidebar.multiselect(
+    "🏢 Sucursal", 
+    options=sorted(suc_disp), 
+    default=suc_disp,
+    help="Selecciona sucursales específicas"
+)
 
-sel_producto = st.sidebar.multiselect("Producto Agrupado", options=sorted(opt['producto_agrupado'].unique()), default=opt['producto_agrupado'].unique())
-sel_tipo = st.sidebar.multiselect("Tipo de Cliente", options=sorted(opt['tipo_cliente'].unique()), default=opt['tipo_cliente'].unique())
+sel_producto = st.sidebar.multiselect(
+    "📦 Producto", 
+    options=sorted(opt['producto_agrupado'].unique()), 
+    default=opt['producto_agrupado'].unique()
+)
 
-# --- INTERFAZ ---
+sel_tipo = st.sidebar.multiselect(
+    "👤 Tipo de Cliente", 
+    options=sorted(opt['tipo_cliente'].unique()), 
+    default=opt['tipo_cliente'].unique()
+)
+
+# --- INTERFAZ PRINCIPAL ---
 st.title("📊 FPD Daily: Dashboard de Riesgo")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📈 Resumen General", "🍇 Análisis de Cosechas", "🏢 Por Sucursal", "📋 Detalle de Datos"])
@@ -111,7 +130,7 @@ with tab1:
         df_raw = get_filtered_data(sel_regional, sel_sucursal, sel_producto, sel_tipo)
         
         if not df_raw.empty:
-            # Agregaciones para gráficas
+            # Procesamiento de Dataframes para gráficas
             df_total = df_raw.groupby('cosecha_id').agg({'total_casos':'sum', 'fpd2_si':'sum', 'np_si':'sum'}).reset_index()
             df_total['fpd2_rate'] = (df_total['fpd2_si'] * 100.0 / df_total['total_casos'])
             df_total['np_rate'] = (df_total['np_si'] * 100.0 / df_total['total_casos'])
@@ -140,7 +159,7 @@ with tab1:
 
             st.divider()
 
-            # --- FILA 1 ---
+            # --- FILA 1: TENDENCIAS (50/50) ---
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader("Tendencia Global (FPD2)")
@@ -159,7 +178,7 @@ with tab1:
                 fig2.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
                 st.plotly_chart(fig2, use_container_width=True)
 
-            # --- FILA 2 ---
+            # --- FILA 2: COMPARATIVAS (50/50) ---
             c3, c4 = st.columns(2)
             with c3:
                 st.subheader("Comparativa Interanual (FPD2)")
@@ -179,7 +198,7 @@ with tab1:
                 fig4.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=400, legend=LEGEND_BOTTOM, hovermode="x unified")
                 st.plotly_chart(fig4, use_container_width=True)
 
-            # --- FILA 3 ---
+            # --- FILA 3: TIPO DE CLIENTE (ANCHO COMPLETO) ---
             st.subheader("Tendencia FPD2 por Tipo de Cliente (Excluyendo Formers)")
             fig5 = px.line(df_tipo_graf, x='cosecha_id', y='fpd2_rate', color='tipo_cliente', markers=True,
                            text=df_tipo_graf['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
@@ -192,13 +211,12 @@ with tab1:
 
             # --- RANKINGS ---
             st.subheader(f"🏆 Rankings de Sucursales - Cosecha {ultima_cosecha}")
-            df_suc_current = df_raw[df_raw['cosecha_id'] == ultima_cosecha].groupby('sucursal').agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
-            df_suc_current['fpd2_rate'] = (df_suc_current['fpd2_si'] * 100.0 / df_suc_current['total_casos'])
-            
+            df_suc_curr = df_raw[df_raw['cosecha_id'] == ultima_cosecha].groupby('sucursal').agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
+            df_suc_curr['fpd2_rate'] = (df_suc_curr['fpd2_si'] * 100.0 / df_suc_curr['total_casos'])
             df_suc_prev = df_raw[df_raw['cosecha_id'] == cosecha_ant].groupby('sucursal').agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
             df_suc_prev['fpd2_rate_ant'] = (df_suc_prev['fpd2_si'] * 100.0 / df_suc_prev['total_casos'])
             
-            df_rank = pd.merge(df_suc_current, df_suc_prev[['sucursal', 'fpd2_rate_ant']], on='sucursal', how='left')
+            df_rank = pd.merge(df_suc_curr, df_suc_prev[['sucursal', 'fpd2_rate_ant']], on='sucursal', how='left')
 
             if not df_rank.empty:
                 col_t, col_b = st.columns(2)
@@ -213,12 +231,12 @@ with tab1:
                     st.dataframe(df_rank.sort_values('fpd2_rate', ascending=True).head(10), column_config=conf, hide_index=True, use_container_width=True)
 
         else:
-            st.warning("No hay datos para estos filtros.")
+            st.warning("No hay datos para la combinación de filtros seleccionada.")
 
     except Exception as e:
-        st.error(f"Error en el proceso: {e}")
+        st.error(f"Se produjo un error al procesar los filtros: {e}")
 
-# Pestañas vacías
+# Pestañas restantes vacías
 with tab2: pass
 with tab3: pass
 with tab4: pass
