@@ -81,18 +81,20 @@ def get_tab1_data(regionales, sucursales, productos, tipos):
     """
     return duckdb.query(query).to_df()
 
-# 4. Función para Tab 2 (Independiente y FILTRO ESTRICTO PR NOMINAS)
+# 4. Función para Tab 2 (FILTRO RADICAL SIN NOMINAS)
 @st.cache_data
 def get_tab2_data():
+    # Usamos LIKE con comodines para asegurar que nada que diga NOMINA pase
     query = """
     WITH base AS (
         SELECT 
             TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE) as fecha_dt,
             CASE WHEN fpd2 = 'FPD' THEN 1 ELSE 0 END as fpd2_num,
             id_credito, 
-            COALESCE(unidad_regional, 'N/A') as unidad_regional, 
-            TRIM(UPPER(producto_agrupado)) as prod_clean
+            COALESCE(unidad_regional, 'N/A') as unidad_regional,
+            producto_agrupado
         FROM 'fpd_gemini.parquet'
+        WHERE UPPER(producto_agrupado) NOT LIKE '%NOMINA%'
     )
     SELECT 
         strftime(fecha_dt, '%Y%m') as cosecha_id,
@@ -101,14 +103,12 @@ def get_tab2_data():
         SUM(fpd2_num) as fpd2_si,
         (SUM(fpd2_num) * 100.0 / COUNT(id_credito)) as fpd2_rate
     FROM base 
-    WHERE fecha_dt <= (CURRENT_DATE - INTERVAL 2 MONTH) 
-      AND fecha_dt IS NOT NULL
-      AND prod_clean NOT IN ('PR NOMINAS', 'PR NOMINA') -- Filtro estricto
+    WHERE fecha_dt <= (CURRENT_DATE - INTERVAL 2 MONTH) AND fecha_dt IS NOT NULL
     GROUP BY ALL ORDER BY cosecha_id ASC
     """
     return duckdb.query(query).to_df()
 
-# --- SIDEBAR (Solo Tab 1) ---
+# --- SIDEBAR (Solo afecta a Tab 1) ---
 st.sidebar.header("🎯 Filtros Monitor FPD")
 opt = get_filter_universes()
 sel_reg = st.sidebar.multiselect("📍 Regional", options=sorted(opt['unidad_regional'].unique()))
@@ -117,11 +117,11 @@ sel_suc = st.sidebar.multiselect("🏠 Sucursal", options=suc_disp)
 sel_prod = st.sidebar.multiselect("📦 Producto", options=sorted(opt['producto_agrupado'].unique()))
 sel_tip = st.sidebar.multiselect("👥 Tipo Cliente", options=sorted(opt['tipo_cliente'].unique()))
 
-st.title("📊 Dashboard de Riesgo Crediticio")
+st.title("📊 Monitor de Riesgo Crediticio")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📈 Monitor FPD", "💼 Resumen Ejecutivo", "🏢 Por Sucursal", "📋 Detalle de Datos"])
 
-# --- TAB 1: MONITOR FPD ---
+# --- TAB 1: MONITOR FPD (RESTAURADA TOTALMENTE) ---
 with tab1:
     df1 = get_tab1_data(sel_reg, sel_suc, sel_prod, sel_tip)
     if not df1.empty:
@@ -145,7 +145,7 @@ with tab1:
             fig1 = go.Figure(go.Scatter(x=df_t['cosecha_id'], y=df_t['fpd2_rate'], mode='lines+markers+text',
                 text=df_t['fpd2_rate'].apply(lambda x: f'{x:.1f}%'), line=dict(color='#1B4F72', width=4), 
                 fill='tozeroy', fillcolor='rgba(27, 79, 114, 0.1)', name='Global'))
-            fig1.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
+            fig1.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, showlegend=True, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig1, use_container_width=True)
         with c2:
             st.subheader("FPD2 por Origen")
@@ -162,7 +162,7 @@ with tab1:
             df_y = df1.groupby(['anio', 'mes']).agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
             df_y['fpd2_rate'] = (df_y['fpd2_si'] * 100.0 / df_y['total_casos'])
             df_y = df_y[df_y['anio'].isin([2023, 2024, 2025])]
-            fig3 = px.line(df_y, x='mes', y='fpd2_rate', color=df_y['anio'].astype(str), markers=True, color_discrete_map={'2023':'#BDC3C7','2024':'#5499C7','2025':'#1A5276'})
+            fig3 = px.line(df_y, x='mes', y='fpd2_rate', color=df_y['anio'].astype(str), markers=True)
             fig3.update_layout(xaxis=dict(ticktext=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'], tickvals=['01','02','03','04','05','06','07','08','09','10','11','12']),
                                yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig3, use_container_width=True)
@@ -197,26 +197,31 @@ with tab1:
         ct.dataframe(df_final_r.sort_values('rate', ascending=False).head(10), column_config=conf, use_container_width=True, hide_index=True)
         cb.dataframe(df_final_r.sort_values('rate', ascending=True).head(10), column_config=conf, use_container_width=True, hide_index=True)
 
-# --- TAB 2: RESUMEN EJECUTIVO (Independiente) ---
+# --- TAB 2: RESUMEN EJECUTIVO (INDEPENDIENTE Y SIN NOMINAS) ---
 with tab2:
     df2 = get_tab2_data()
     if not df2.empty:
         st.header("💼 Resumen Ejecutivo Regional")
-        st.caption("Nota: Este resumen excluye 'PR NOMINAS' y no depende de filtros laterales.")
+        st.caption("Nota: Este resumen excluye todos los productos de NOMINA y no depende de filtros laterales.")
         
         ult_c = df2['cosecha_id'].max()
         df_rank = df2[df2['cosecha_id'] == ult_c].sort_values('fpd2_rate')
         
         m_reg, p_reg = df_rank.iloc[0], df_rank.iloc[-1]
         c_m, c_p = st.columns(2)
-        c_m.success(f"🏆 **MEJOR: {m_reg['unidad_regional']}**")
-        c_m.metric(f"FPD2 Cosecha {ult_c}", f"{m_reg['fpd2_rate']:.2f}%")
         
-        c_p.error(f"🚨 **PEOR: {p_reg['unidad_regional']}**")
-        c_p.metric(f"FPD2 Cosecha {ult_c}", f"{p_reg['fpd2_rate']:.2f}%")
-        
+        with c_m:
+            st.success(f"🏆 **MEJOR UNIDAD: {m_reg['unidad_regional']}**")
+            st.metric(f"FPD2 Cosecha {ult_c}", f"{m_reg['fpd2_rate']:.2f}%")
+            st.caption(f"Créditos colocados: {int(m_reg['total_casos'])}")
+
+        with c_p:
+            st.error(f"🚨 **PEOR UNIDAD: {p_reg['unidad_regional']}**")
+            st.metric(f"FPD2 Cosecha {ult_c}", f"{p_reg['fpd2_rate']:.2f}%")
+            st.caption(f"Créditos colocados: {int(p_reg['total_casos'])}")
+
         st.divider()
-        st.subheader(f"📋 Detalle Regional - Cosecha {ult_c}")
+        st.subheader(f"📋 Detalle de Calidad por Regional - Cosecha {ult_c}")
         st.dataframe(
             df_rank.style.background_gradient(subset=['fpd2_rate'], cmap='YlOrRd')
             .format({'fpd2_rate':'{:.2f}%', 'total_casos':'{:,}'}), 
