@@ -17,7 +17,7 @@ st.set_page_config(
     page_icon="📊"
 )
 
-# Estilo global para leyendas debajo del eje X (Tu estándar)
+# Estilo global para leyendas debajo del eje X
 LEGEND_BOTTOM = dict(
     orientation="h",
     yanchor="top",
@@ -26,7 +26,7 @@ LEGEND_BOTTOM = dict(
     x=0.5
 )
 
-# 2. Carga de opciones iniciales (Manejo de Nulos incluido)
+# 2. Carga de opciones iniciales (Manejo de Nulos)
 @st.cache_data
 def get_filter_options():
     con = duckdb.connect()
@@ -88,22 +88,23 @@ def get_filtered_data(regionales, sucursales, productos, tipos):
     return duckdb.query(query).to_df()
 
 # --- INTERFAZ ---
-st.title("📊 FPD Daily: Monitor de Calidad de Cartera")
+st.title("📊 FPD Daily: Dashboard de Riesgo")
 
-# BARRA DE FILTROS SUPERIOR (ESTILO BI)
-with st.expander("🔍 Panel de Filtros", expanded=True):
-    opt = get_filter_options()
-    f1, f2, f3, f4 = st.columns(4)
-    
-    with f1:
-        sel_reg = st.multiselect("Unidad Regional", options=sorted(opt['unidad_regional'].unique()), default=opt['unidad_regional'].unique())
-    with f2:
-        suc_disp = opt[opt['unidad_regional'].isin(sel_reg)]['sucursal'].unique()
-        sel_suc = st.multiselect("Sucursal", options=sorted(suc_disp), default=suc_disp)
-    with f3:
-        sel_prod = st.multiselect("Producto", options=sorted(opt['producto_agrupado'].unique()), default=opt['producto_agrupado'].unique())
-    with f4:
-        sel_tip = st.multiselect("Tipo de Cliente", options=sorted(opt['tipo_cliente'].unique()), default=opt['tipo_cliente'].unique())
+# PANEL DE FILTROS EN FILA SUPERIOR (SIN EXPANDER)
+opt = get_filter_options()
+f1, f2, f3, f4 = st.columns(4)
+
+with f1:
+    sel_reg = st.multiselect("📍 Unidad Regional", options=sorted(opt['unidad_regional'].unique()), default=opt['unidad_regional'].unique())
+with f2:
+    suc_disp = opt[opt['unidad_regional'].isin(sel_reg)]['sucursal'].unique()
+    sel_suc = st.multiselect("🏠 Sucursal", options=sorted(suc_disp), default=suc_disp)
+with f3:
+    sel_prod = st.multiselect("📦 Producto", options=sorted(opt['producto_agrupado'].unique()), default=opt['producto_agrupado'].unique())
+with f4:
+    sel_tip = st.multiselect("👥 Tipo Cliente", options=sorted(opt['tipo_cliente'].unique()), default=opt['tipo_cliente'].unique())
+
+st.markdown("---")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📈 Resumen General", "🍇 Análisis de Cosechas", "🏢 Por Sucursal", "📋 Detalle de Datos"])
 
@@ -139,9 +140,7 @@ with tab1:
             k3.metric("Tasa FPD2", f"{ult['fpd2_rate']:.2f}%")
             k4.metric("Tasa NP", f"{ult['np_rate']:.2f}%")
 
-            st.divider()
-
-            # --- FILA 1 ---
+            # --- FILA 1 (50/50) ---
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader("Tendencia Global (FPD2)")
@@ -160,7 +159,7 @@ with tab1:
                 fig2.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
                 st.plotly_chart(fig2, use_container_width=True)
 
-            # --- FILA 2 ---
+            # --- FILA 2 (50/50) ---
             c3, c4 = st.columns(2)
             with c3:
                 st.subheader("Comparativa Interanual (FPD2)")
@@ -169,7 +168,7 @@ with tab1:
                                color_discrete_map={'2023': '#BDC3C7', '2024': '#5499C7', '2025': '#1A5276'})
                 fig3.update_traces(textposition="top center")
                 fig3.update_layout(xaxis=dict(ticktext=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'], tickvals=['01','02','03','04','05','06','07','08','09','10','11','12']),
-                                   yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=400, legend=LEGEND_BOTTOM)
+                                   yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
                 st.plotly_chart(fig3, use_container_width=True)
 
             with c4:
@@ -177,10 +176,10 @@ with tab1:
                 fig4 = go.Figure()
                 fig4.add_trace(go.Scatter(x=df_total['cosecha_id'], y=df_total['fpd2_rate'], mode='lines+markers', name='% FPD2', line=dict(color='#1B4F72', width=3)))
                 fig4.add_trace(go.Scatter(x=df_total['cosecha_id'], y=df_total['np_rate'], mode='lines+markers', name='% NP', line=dict(color='#D35400', width=3, dash='dash')))
-                fig4.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=400, legend=LEGEND_BOTTOM, hovermode="x unified")
+                fig4.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM, hovermode="x unified")
                 st.plotly_chart(fig4, use_container_width=True)
 
-            # --- FILA 3 ---
+            # --- FILA 3 (ANCHO COMPLETO) ---
             st.subheader("Tendencia FPD2 por Tipo de Cliente (Excluyendo Formers)")
             fig5 = px.line(df_tipo_graf, x='cosecha_id', y='fpd2_rate', color='tipo_cliente', markers=True,
                            text=df_tipo_graf['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
@@ -213,7 +212,7 @@ with tab1:
                     st.dataframe(df_rank.sort_values('fpd2_rate', ascending=True).head(10), column_config=conf, hide_index=True, use_container_width=True)
 
     except Exception as e:
-        st.error(f"Error al procesar el dashboard: {e}")
+        st.error(f"Error en el dashboard: {e}")
 
 # Pestañas restantes vacías
 with tab2: pass
