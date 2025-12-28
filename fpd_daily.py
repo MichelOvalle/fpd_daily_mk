@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 # Intentar importar duckdb
 try:
@@ -18,9 +17,10 @@ st.set_page_config(
     page_icon="📊"
 )
 
-# 2. Función de procesamiento principal con DuckDB
+# 2. Procesamiento de datos con DuckDB
 @st.cache_data
 def get_fpd_data():
+    # SQL optimizado para obtener todas las dimensiones necesarias
     query = """
     WITH base AS (
         SELECT 
@@ -50,7 +50,7 @@ def get_fpd_data():
 
 # --- TÍTULO ---
 st.title("📊 FPD Daily: Dashboard de Riesgo")
-st.markdown("Análisis de Cosechas y Comportamiento Mensual (FPD2)")
+st.markdown("Monitoreo de indicadores **FPD2** | Cosechas en formato **YYYYMM**")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📈 Resumen General", "🍇 Análisis de Cosechas", "🏢 Por Sucursal", "📋 Detalle de Datos"])
 
@@ -59,34 +59,34 @@ with tab1:
         df_raw = get_fpd_data()
         
         if not df_raw.empty:
-            # --- PREPARACIÓN DE DATOS ---
-            # Total por cosecha
+            # --- AGREGACIONES ---
+            # Total Global
             df_total = df_raw.groupby('cosecha_id').agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
             df_total['fpd2_rate'] = (df_total['fpd2_si'] * 100.0 / df_total['total_casos'])
             
-            # Por origen
+            # Por Origen
             df_origen = df_raw.groupby(['cosecha_id', 'origen2']).agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
             df_origen['fpd2_rate'] = (df_origen['fpd2_si'] * 100.0 / df_origen['total_casos'])
 
-            # Cosechas para comparación
+            # Variables para comparación
             lista_cosechas = sorted(df_total['cosecha_id'].unique())
             ultima_cosecha = lista_cosechas[-1]
             cosecha_ant = lista_cosechas[-2] if len(lista_cosechas) > 1 else ultima_cosecha
 
-            # KPIs
+            # --- SECCIÓN 1: KPIs ---
             k1, k2, k3 = st.columns(3)
             ult_row = df_total.iloc[-1]
             k1.metric("Cosecha Actual", ultima_cosecha)
-            k2.metric("Volumen Total", f"{int(ult_row['total_casos']):,}")
+            k2.metric("Volumen de Créditos", f"{int(ult_row['total_casos']):,}")
             k3.metric("Tasa FPD2 Total", f"{ult_row['fpd2_rate']:.2f}%")
 
             st.divider()
 
-            # --- FILA 1: LAS DOS GRÁFICAS ORIGINALES ---
-            col_1, col_2 = st.columns(2)
+            # --- SECCIÓN 2: FILA DE GRÁFICAS INICIALES (50/50) ---
+            col1, col2 = st.columns(2)
 
-            with col_1:
-                st.subheader("Tendencia Global (FPD2)")
+            with col1:
+                st.subheader("Tendencia Global (Área)")
                 fig1 = go.Figure()
                 fig1.add_trace(go.Scatter(
                     x=df_total['cosecha_id'], y=df_total['fpd2_rate'],
@@ -95,44 +95,50 @@ with tab1:
                     textposition="top center",
                     line=dict(color='#1B4F72', width=4),
                     fill='tozeroy', fillcolor='rgba(27, 79, 114, 0.1)',
-                    name='Tasa Total'
+                    name='Global'
                 ))
                 fig1.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), 
                                    plot_bgcolor='white', height=400, margin=dict(l=10, r=10, t=30, b=10))
                 st.plotly_chart(fig1, use_container_width=True)
 
-            with col_2:
-                st.subheader("FPD2 por Origen")
+            with col2:
+                st.subheader("Desglose por Origen")
+                # Aseguramos que origen2 se vea bien (Fisico/Digital)
                 fig2 = px.line(df_origen, x='cosecha_id', y='fpd2_rate', color='origen2', markers=True,
                                text=df_origen['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
-                               color_discrete_map={'fisico': '#2E86C1', 'digital': '#CB4335'})
+                               color_discrete_sequence=['#2E86C1', '#CB4335'])
                 fig2.update_traces(textposition="top center", line=dict(width=3))
                 fig2.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), 
                                    plot_bgcolor='white', height=400, margin=dict(l=10, r=10, t=30, b=10))
                 st.plotly_chart(fig2, use_container_width=True)
 
-            # --- FILA 2: NUEVA GRÁFICA DE COMPORTAMIENTO (BARRAS) ---
-            st.subheader("Comportamiento Mensual FPD2")
-            # Gráfica de barras para resaltar el comportamiento mes a mes
-            fig3 = px.bar(
-                df_total, x='cosecha_id', y='fpd2_rate',
+            # --- SECCIÓN 3: GRÁFICA DE COMPORTAMIENTO (LINEA COMPLETA) ---
+            st.subheader("Comportamiento Mes a Mes (FPD2)")
+            fig3 = go.Figure()
+            fig3.add_trace(go.Scatter(
+                x=df_total['cosecha_id'], 
+                y=df_total['fpd2_rate'],
+                mode='lines+markers+text',
                 text=df_total['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
-                color_discrete_sequence=['#5D6D7E']
-            )
-            fig3.update_traces(textposition='outside', marker_line_color='rgb(8,48,107)', marker_line_width=1.5, opacity=0.8)
+                textposition="top center",
+                line=dict(color='#2C3E50', width=3), # Gris oscuro/profesional
+                marker=dict(size=10, symbol='circle', borderwidth=2, bordercolor='white'),
+                name='Comportamiento'
+            ))
             fig3.update_layout(
-                xaxis=dict(type='category', title="Cosecha (YYYYMM)"),
-                yaxis=dict(title="Tasa FPD2 (%)", ticksuffix="%"),
-                plot_bgcolor='white', height=400, margin=dict(l=10, r=10, t=30, b=10)
+                xaxis=dict(type='category', title="Mes de Cosecha (YYYYMM)", showgrid=False),
+                yaxis=dict(title="Tasa FPD2 (%)", ticksuffix="%", gridcolor='#F2F3F4'),
+                plot_bgcolor='white', height=450,
+                hovermode="x unified",
+                margin=dict(l=10, r=10, t=30, b=10)
             )
             st.plotly_chart(fig3, use_container_width=True)
 
             st.divider()
 
-            # --- FILA 3: RANKING SUCURSALES ---
+            # --- SECCIÓN 4: RANKING SUCURSALES ---
             st.subheader(f"🏆 Desempeño por Sucursal - Cosecha {ultima_cosecha}")
-            
-            # Obtener datos para el ranking
+            # Consulta para el ranking con comparativa
             query_rank = f"""
             SELECT 
                 sucursal,
@@ -156,16 +162,16 @@ with tab1:
                     "fpd2_rate_ant": st.column_config.NumberColumn(f"% FPD {cosecha_ant}", format="%.2f%%")
                 }
                 with col_top:
-                    st.markdown("🔴 **Peores 10 (Mayor FPD)**")
+                    st.markdown("🔴 **Top 10: Mayor FPD (Riesgo)**")
                     st.dataframe(df_suc.sort_values('fpd2_rate', ascending=False).head(10), column_config=conf, hide_index=True, use_container_width=True)
                 with col_bottom:
-                    st.markdown("🟢 **Mejores 10 (Menor FPD)**")
+                    st.markdown("🟢 **Bottom 10: Menor FPD (Sano)**")
                     st.dataframe(df_suc.sort_values('fpd2_rate', ascending=True).head(10), column_config=conf, hide_index=True, use_container_width=True)
 
     except Exception as e:
-        st.error(f"Error en la visualización: {e}")
+        st.error(f"Se produjo un error: {e}")
 
-# Pestañas vacías
+# Pestañas vacías restantes
 with tab2: pass
 with tab3: pass
 with tab4: pass
