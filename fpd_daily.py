@@ -212,7 +212,7 @@ with tab1:
                     st.dataframe(df_rank.sort_values('fpd2_rate', ascending=True).head(10), column_config=conf, hide_index=True, use_container_width=True)
 
     except Exception as e:
-        st.error(f"Error en el dashboard: {e}")
+        st.error(f"Error en el dashboard.: {e}")
 
 # Pestañas restantes vacías
 with tab2: pass
