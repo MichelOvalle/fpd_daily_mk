@@ -21,7 +21,7 @@ st.set_page_config(
 LEGEND_BOTTOM = dict(
     orientation="h",
     yanchor="top",
-    y=-0.25,
+    y=-0.3,
     xanchor="center",
     x=0.5
 )
@@ -40,9 +40,9 @@ def get_filter_universes():
     """).df()
     return df
 
-# 3. Función de procesamiento con filtros inteligentes (Vacio = Todos)
+# 3. Función para Tab 1 (Dependiente de Filtros)
 @st.cache_data
-def get_filtered_data(regionales, sucursales, productos, tipos):
+def get_tab1_data(regionales, sucursales, productos, tipos):
     def to_sql_list(lista):
         return "'" + "','".join(lista) + "'"
 
@@ -59,135 +59,160 @@ def get_filtered_data(regionales, sucursales, productos, tipos):
             COALESCE(producto_agrupado, 'N/A') as producto_agrupado
         FROM 'fpd_gemini.parquet'
     ),
-    filtrado_inicial AS (
+    filtrado AS (
         SELECT * FROM base
         WHERE 1=1
         {"AND unidad_regional IN (" + to_sql_list(regionales) + ")" if regionales else ""}
         {"AND sucursal IN (" + to_sql_list(sucursales) + ")" if sucursales else ""}
         {"AND producto_agrupado IN (" + to_sql_list(productos) + ")" if productos else ""}
         {"AND tipo_cliente IN (" + to_sql_list(tipos) + ")" if tipos else ""}
-    ),
-    final AS (
-        SELECT * FROM filtrado_inicial 
-        WHERE fecha_dt <= (CURRENT_DATE - INTERVAL 2 MONTH)
-          AND fecha_dt IS NOT NULL
     )
     SELECT 
         strftime(fecha_dt, '%Y%m') as cosecha_id,
         EXTRACT(YEAR FROM fecha_dt) as anio,
         strftime(fecha_dt, '%m') as mes,
-        origen2, tipo_cliente, sucursal, unidad_regional,
+        origen2, tipo_cliente, sucursal,
         COUNT(id_credito) as total_casos,
         SUM(fpd2_num) as fpd2_si,
         SUM(np_num) as np_si
-    FROM final
-    GROUP BY ALL
-    ORDER BY cosecha_id ASC
+    FROM filtrado 
+    WHERE fecha_dt <= (CURRENT_DATE - INTERVAL 2 MONTH) AND fecha_dt IS NOT NULL
+    GROUP BY ALL ORDER BY cosecha_id ASC
     """
     return duckdb.query(query).to_df()
 
-# --- BARRA LATERAL (FILTROS) ---
-st.sidebar.header("🎯 Filtros de Cartera")
-opt = get_filter_universes()
+# 4. Función para Tab 2 (Independiente y sin PR NOMINAS)
+@st.cache_data
+def get_tab2_data():
+    query = """
+    WITH base AS (
+        SELECT 
+            TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE) as fecha_dt,
+            CASE WHEN fpd2 = 'FPD' THEN 1 ELSE 0 END as fpd2_num,
+            id_credito, 
+            COALESCE(unidad_regional, 'N/A') as unidad_regional, 
+            producto_agrupado
+        FROM 'fpd_gemini.parquet'
+        WHERE producto_agrupado != 'PR NOMINAS'
+    )
+    SELECT 
+        strftime(fecha_dt, '%Y%m') as cosecha_id,
+        unidad_regional,
+        COUNT(id_credito) as total_casos,
+        SUM(fpd2_num) as fpd2_si,
+        (SUM(fpd2_num) * 100.0 / COUNT(id_credito)) as fpd2_rate
+    FROM base 
+    WHERE fecha_dt <= (CURRENT_DATE - INTERVAL 2 MONTH) AND fecha_dt IS NOT NULL
+    GROUP BY ALL ORDER BY cosecha_id ASC
+    """
+    return duckdb.query(query).to_df()
 
-sel_reg = st.sidebar.multiselect("📍 Unidad Regional", options=sorted(opt['unidad_regional'].unique()))
+# --- BARRA LATERAL (Solo afecta a Tab 1) ---
+st.sidebar.header("🎯 Filtros Monitor FPD")
+opt = get_filter_universes()
+sel_reg = st.sidebar.multiselect("📍 Regional", options=sorted(opt['unidad_regional'].unique()))
 suc_disp = sorted(opt[opt['unidad_regional'].isin(sel_reg)]['sucursal'].unique()) if sel_reg else sorted(opt['sucursal'].unique())
 sel_suc = st.sidebar.multiselect("🏠 Sucursal", options=suc_disp)
 sel_prod = st.sidebar.multiselect("📦 Producto", options=sorted(opt['producto_agrupado'].unique()))
-sel_tip = st.sidebar.multiselect("👥 Tipo de Cliente", options=sorted(opt['tipo_cliente'].unique()))
+sel_tip = st.sidebar.multiselect("👥 Tipo Cliente", options=sorted(opt['tipo_cliente'].unique()))
 
-# --- CUERPO PRINCIPAL ---
-st.title("📊 Dashboard de Control de Riesgo")
+st.title("📊 Dashboard de Riesgo Crediticio")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📈 Monitor FPD", "💼 Resumen Ejecutivo", "🏢 Por Sucursal", "📋 Detalle de Datos"])
 
-# Obtención de datos filtrados para todas las pestañas
-df_raw = get_filtered_data(sel_reg, sel_suc, sel_prod, sel_tip)
-
-# --- TAB 1: MONITOR FPD ---
+# --- TAB 1: MONITOR FPD (Restaurada) ---
 with tab1:
-    if not df_raw.empty:
-        df_total = df_raw.groupby('cosecha_id').agg({'total_casos':'sum', 'fpd2_si':'sum', 'np_si':'sum'}).reset_index()
-        df_total['fpd2_rate'] = (df_total['fpd2_si'] * 100.0 / df_total['total_casos'])
-        df_total['np_rate'] = (df_total['np_si'] * 100.0 / df_total['total_casos'])
+    df1 = get_tab1_data(sel_reg, sel_suc, sel_prod, sel_tip)
+    if not df1.empty:
+        df_t = df1.groupby('cosecha_id').agg({'total_casos':'sum', 'fpd2_si':'sum', 'np_si':'sum'}).reset_index()
+        df_t['fpd2_rate'] = (df_t['fpd2_si'] * 100.0 / df_t['total_casos'])
+        df_t['np_rate'] = (df_t['np_si'] * 100.0 / df_t['total_casos'])
         
-        # KPIs y Gráficas de la pestaña 1 (Mantenidas)
+        # KPIs
         k1, k2, k3, k4 = st.columns(4)
-        ult = df_total.iloc[-1]
+        ult = df_t.iloc[-1]
         k1.metric("Cosecha Actual", ult['cosecha_id'])
         k2.metric("Créditos", f"{int(ult['total_casos']):,}")
         k3.metric("Tasa FPD2", f"{ult['fpd2_rate']:.2f}%")
         k4.metric("Tasa NP", f"{ult['np_rate']:.2f}%")
-        st.info("Pestaña Monitor FPD restablecida con éxito.")
-
-# --- TAB 2: RESUMEN EJECUTIVO (NUEVA LÓGICA) ---
-with tab2:
-    if not df_raw.empty:
-        st.header("💼 Análisis de Unidades Regionales")
-        
-        # 1. Obtener la última cosecha disponible
-        ultima_cosecha = df_raw['cosecha_id'].max()
-        st.subheader(f"Desempeño Regional - Cosecha {ultima_cosecha}")
-
-        # 2. Agrupar por Regional para esa cosecha
-        df_reg_last = df_raw[df_raw['cosecha_id'] == ultima_cosecha].groupby('unidad_regional').agg({
-            'total_casos': 'sum',
-            'fpd2_si': 'sum'
-        }).reset_index()
-        df_reg_last['fpd2_rate'] = (df_reg_last['fpd2_si'] * 100.0 / df_reg_last['total_casos'])
-        
-        # 3. Ordenar para encontrar mejor y peor
-        df_reg_sorted = df_reg_last.sort_values('fpd2_rate', ascending=True)
-        
-        mejor_reg = df_reg_sorted.iloc[0]
-        peor_reg = df_reg_sorted.iloc[-1]
-
-        # 4. Mostrar KPIs de impacto
-        c_mejor, c_peor = st.columns(2)
-        
-        with c_mejor:
-            st.success(f"🌟 **MEJOR REGIONAL: {mejor_reg['unidad_regional']}**")
-            st.metric(label="Tasa FPD2 Mínima", value=f"{mejor_reg['fpd2_rate']:.2f}%")
-            st.caption(f"Basado en {int(mejor_reg['total_casos'])} créditos colocados.")
-
-        with c_peor:
-            st.error(f"⚠️ **PEOR REGIONAL: {peor_reg['unidad_regional']}**")
-            st.metric(label="Tasa FPD2 Máxima", value=f"{peor_reg['fpd2_rate']:.2f}%")
-            st.caption(f"Basado en {int(peor_reg['total_casos'])} créditos colocados.")
-
         st.divider()
 
-        # 5. Gráfica de Barras para comparar todas las regionales de la última cosecha
-        st.markdown("### Comparativa de Riesgo por Unidad Regional")
-        fig_reg = px.bar(
-            df_reg_sorted,
-            x='unidad_regional',
-            y='fpd2_rate',
-            text=df_reg_sorted['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
-            labels={'unidad_regional': 'Unidad Regional', 'fpd2_rate': '% FPD2'},
-            color='fpd2_rate',
-            color_continuous_scale='RdYlGn_r' # Rojo para el alto, Verde para el bajo
-        )
+        # Fila 1: Global y Origen
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("Tendencia Global (FPD2)")
+            fig1 = go.Figure(go.Scatter(x=df_t['cosecha_id'], y=df_t['fpd2_rate'], mode='lines+markers+text',
+                text=df_t['fpd2_rate'].apply(lambda x: f'{x:.1f}%'), line=dict(color='#1B4F72', width=4), 
+                fill='tozeroy', fillcolor='rgba(27, 79, 114, 0.1)', name='Global'))
+            fig1.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
+            st.plotly_chart(fig1, use_container_width=True)
+        with c2:
+            st.subheader("FPD2 por Origen")
+            df_o = df1.groupby(['cosecha_id', 'origen2']).agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
+            df_o['fpd2_rate'] = (df_o['fpd2_si'] * 100.0 / df_o['total_casos'])
+            fig2 = px.line(df_o, x='cosecha_id', y='fpd2_rate', color='origen2', markers=True, color_discrete_map={'fisico':'#2E86C1','digital':'#CB4335'})
+            fig2.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
+            st.plotly_chart(fig2, use_container_width=True)
+
+        # Fila 2: YoY y FPD vs NP
+        c3, c4 = st.columns(2)
+        with c3:
+            st.subheader("Comparativa Interanual")
+            df_y = df1.groupby(['anio', 'mes']).agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
+            df_y['fpd2_rate'] = (df_y['fpd2_si'] * 100.0 / df_y['total_casos'])
+            df_y = df_y[df_y['anio'].isin([2023, 2024, 2025])]
+            fig3 = px.line(df_y, x='mes', y='fpd2_rate', color=df_y['anio'].astype(str), markers=True, color_discrete_map={'2023':'#BDC3C7','2024':'#5499C7','2025':'#1A5276'})
+            fig3.update_layout(xaxis=dict(ticktext=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'], tickvals=['01','02','03','04','05','06','07','08','09','10','11','12']),
+                               yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
+            st.plotly_chart(fig3, use_container_width=True)
+        with c4:
+            st.subheader("FPD2 vs NP")
+            fig4 = go.Figure()
+            fig4.add_trace(go.Scatter(x=df_t['cosecha_id'], y=df_t['fpd2_rate'], name='% FPD2', line=dict(color='#1B4F72')))
+            fig4.add_trace(go.Scatter(x=df_t['cosecha_id'], y=df_t['np_rate'], name='% NP', line=dict(color='#D35400', dash='dash')))
+            fig4.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
+            st.plotly_chart(fig4, use_container_width=True)
+
+        # Fila 3: Tipo Cliente
+        st.subheader("Tipo Cliente (Sin Formers)")
+        df_tc = df1[df1['tipo_cliente'] != 'Formers'].groupby(['cosecha_id', 'tipo_cliente']).agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
+        df_tc['fpd2_rate'] = (df_tc['fpd2_si'] * 100.0 / df_tc['total_casos'])
+        fig5 = px.line(df_tc, x='cosecha_id', y='fpd2_rate', color='tipo_cliente', markers=True)
+        fig5.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=400, legend=LEGEND_BOTTOM)
+        st.plotly_chart(fig5, use_container_width=True)
+
+        st.divider()
+        # Rankings
+        st.subheader(f"🏆 Rankings Sucursales - Cosecha {ult['cosecha_id']}")
+        cosechas = sorted(df1['cosecha_id'].unique())
+        ant = cosechas[-2] if len(cosechas) > 1 else cosechas[-1]
+        df_r_c = df1[df1['cosecha_id'] == cosechas[-1]].groupby('sucursal').agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
+        df_r_c['rate'] = (df_r_c['fpd2_si'] * 100.0 / df_r_c['total_casos'])
+        df_r_p = df1[df1['cosecha_id'] == ant].groupby('sucursal').agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
+        df_r_p['rate_ant'] = (df_r_p['fpd2_si'] * 100.0 / df_r_p['total_casos'])
+        df_final_r = pd.merge(df_r_c, df_r_p[['sucursal', 'rate_ant']], on='sucursal', how='left')
+        ct, cb = st.columns(2)
+        conf = {"sucursal":"Sucursal", "total_casos":"Créditos", "rate":st.column_config.NumberColumn("% FPD", format="%.2f%%"), "rate_ant":st.column_config.NumberColumn("% Ant", format="%.2f%%")}
+        ct.dataframe(df_final_r.sort_values('rate', ascending=False).head(10), column_config=conf, use_container_width=True, hide_index=True)
+        cb.dataframe(df_final_r.sort_values('rate', ascending=True).head(10), column_config=conf, use_container_width=True, hide_index=True)
+
+# --- TAB 2: RESUMEN EJECUTIVO (Independiente) ---
+with tab2:
+    df2 = get_tab2_data()
+    if not df2.empty:
+        st.header("💼 Resumen Ejecutivo Regional")
+        st.caption("Excluye 'PR NOMINAS' y no depende de filtros laterales.")
+        ult_c = df2['cosecha_id'].max()
+        df_rank = df2[df2['cosecha_id'] == ult_c].sort_values('fpd2_rate')
         
-        fig_reg.update_traces(textposition='outside')
-        fig_reg.update_layout(
-            plot_bgcolor='white',
-            height=450,
-            showlegend=True,
-            legend=LEGEND_BOTTOM,
-            coloraxis_showscale=False # Ocultamos la barra de color lateral
-        )
-        st.plotly_chart(fig_reg, use_container_width=True)
+        m_reg, p_reg = df_rank.iloc[0], df_rank.iloc[-1]
+        c_m, c_p = st.columns(2)
+        c_m.success(f"🏆 **MEJOR: {m_reg['unidad_regional']}** ({m_reg['fpd2_rate']:.2f}%)")
+        c_p.error(f"🚨 **PEOR: {p_reg['unidad_regional']}** ({p_reg['fpd2_rate']:.2f}%)")
+        
+        st.divider()
+        st.subheader(f"📋 Detalle Regional - Cosecha {ult_c}")
+        st.dataframe(df_rank.style.background_gradient(subset=['fpd2_rate'], cmap='YlOrRd').format({'fpd2_rate':'{:.2f}%'}), use_container_width=True, hide_index=True)
 
-        # 6. Tabla detallada
-        with st.expander("Ver detalle completo de regionales"):
-            st.dataframe(df_reg_sorted[['unidad_regional', 'total_casos', 'fpd2_si', 'fpd2_rate']].rename(columns={
-                'unidad_regional': 'Regional', 'total_casos': 'Créditos Totales', 'fpd2_si': 'Casos FPD', 'fpd2_rate': '% Tasa FPD'
-            }), hide_index=True, use_container_width=True)
-
-    else:
-        st.warning("No hay datos disponibles para mostrar el resumen ejecutivo.")
-
-# Pestañas restantes vacías
-with tab3: pass
-with tab4: pass
+with tab3: st.info("Pestaña Por Sucursal vacía.")
+with tab4: st.info("Pestaña Detalle de Datos vacía.")
