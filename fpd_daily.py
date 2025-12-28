@@ -81,7 +81,7 @@ def get_tab1_data(regionales, sucursales, productos, tipos):
     """
     return duckdb.query(query).to_df()
 
-# 4. Función para Tab 2 (Independiente y sin PR NOMINAS)
+# 4. Función para Tab 2 (Independiente y FILTRO ESTRICTO PR NOMINAS)
 @st.cache_data
 def get_tab2_data():
     query = """
@@ -91,9 +91,8 @@ def get_tab2_data():
             CASE WHEN fpd2 = 'FPD' THEN 1 ELSE 0 END as fpd2_num,
             id_credito, 
             COALESCE(unidad_regional, 'N/A') as unidad_regional, 
-            producto_agrupado
+            TRIM(UPPER(producto_agrupado)) as prod_clean
         FROM 'fpd_gemini.parquet'
-        WHERE producto_agrupado != 'PR NOMINAS'
     )
     SELECT 
         strftime(fecha_dt, '%Y%m') as cosecha_id,
@@ -102,12 +101,14 @@ def get_tab2_data():
         SUM(fpd2_num) as fpd2_si,
         (SUM(fpd2_num) * 100.0 / COUNT(id_credito)) as fpd2_rate
     FROM base 
-    WHERE fecha_dt <= (CURRENT_DATE - INTERVAL 2 MONTH) AND fecha_dt IS NOT NULL
+    WHERE fecha_dt <= (CURRENT_DATE - INTERVAL 2 MONTH) 
+      AND fecha_dt IS NOT NULL
+      AND prod_clean NOT IN ('PR NOMINAS', 'PR NOMINA') -- Filtro estricto
     GROUP BY ALL ORDER BY cosecha_id ASC
     """
     return duckdb.query(query).to_df()
 
-# --- BARRA LATERAL (Solo afecta a Tab 1) ---
+# --- SIDEBAR (Solo Tab 1) ---
 st.sidebar.header("🎯 Filtros Monitor FPD")
 opt = get_filter_universes()
 sel_reg = st.sidebar.multiselect("📍 Regional", options=sorted(opt['unidad_regional'].unique()))
@@ -120,7 +121,7 @@ st.title("📊 Dashboard de Riesgo Crediticio")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📈 Monitor FPD", "💼 Resumen Ejecutivo", "🏢 Por Sucursal", "📋 Detalle de Datos"])
 
-# --- TAB 1: MONITOR FPD (Restaurada) ---
+# --- TAB 1: MONITOR FPD ---
 with tab1:
     df1 = get_tab1_data(sel_reg, sel_suc, sel_prod, sel_tip)
     if not df1.empty:
@@ -173,7 +174,7 @@ with tab1:
             fig4.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig4, use_container_width=True)
 
-        # Fila 3: Tipo Cliente
+        # Fila 3: Tipo Cliente (Sin Formers)
         st.subheader("Tipo Cliente (Sin Formers)")
         df_tc = df1[df1['tipo_cliente'] != 'Formers'].groupby(['cosecha_id', 'tipo_cliente']).agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
         df_tc['fpd2_rate'] = (df_tc['fpd2_si'] * 100.0 / df_tc['total_casos'])
@@ -201,18 +202,27 @@ with tab2:
     df2 = get_tab2_data()
     if not df2.empty:
         st.header("💼 Resumen Ejecutivo Regional")
-        st.caption("Excluye 'PR NOMINAS' y no depende de filtros laterales.")
+        st.caption("Nota: Este resumen excluye 'PR NOMINAS' y no depende de filtros laterales.")
+        
         ult_c = df2['cosecha_id'].max()
         df_rank = df2[df2['cosecha_id'] == ult_c].sort_values('fpd2_rate')
         
         m_reg, p_reg = df_rank.iloc[0], df_rank.iloc[-1]
         c_m, c_p = st.columns(2)
-        c_m.success(f"🏆 **MEJOR: {m_reg['unidad_regional']}** ({m_reg['fpd2_rate']:.2f}%)")
-        c_p.error(f"🚨 **PEOR: {p_reg['unidad_regional']}** ({p_reg['fpd2_rate']:.2f}%)")
+        c_m.success(f"🏆 **MEJOR: {m_reg['unidad_regional']}**")
+        c_m.metric(f"FPD2 Cosecha {ult_c}", f"{m_reg['fpd2_rate']:.2f}%")
+        
+        c_p.error(f"🚨 **PEOR: {p_reg['unidad_regional']}**")
+        c_p.metric(f"FPD2 Cosecha {ult_c}", f"{p_reg['fpd2_rate']:.2f}%")
         
         st.divider()
         st.subheader(f"📋 Detalle Regional - Cosecha {ult_c}")
-        st.dataframe(df_rank.style.background_gradient(subset=['fpd2_rate'], cmap='YlOrRd').format({'fpd2_rate':'{:.2f}%'}), use_container_width=True, hide_index=True)
+        st.dataframe(
+            df_rank.style.background_gradient(subset=['fpd2_rate'], cmap='YlOrRd')
+            .format({'fpd2_rate':'{:.2f}%', 'total_casos':'{:,}'}), 
+            use_container_width=True, 
+            hide_index=True
+        )
 
 with tab3: st.info("Pestaña Por Sucursal vacía.")
 with tab4: st.info("Pestaña Detalle de Datos vacía.")
