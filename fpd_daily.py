@@ -17,45 +17,32 @@ st.set_page_config(
     page_icon="📊"
 )
 
-# 2. Función para procesar datos con DuckDB
+# 2. Función para procesar datos con DuckDB usando la variable 'cosecha' del archivo
 @st.cache_data
 def get_data_fpd2():
-    # SQL: Filtramos meses con madurez (Mes actual - 2 meses)
-    # Convertimos fpd2 a entero para poder sumarlo
+    # Usamos la columna 'cosecha' existente en el parquet
+    # Filtramos por fecha_apertura para asegurar la madurez de 2 meses
     query = """
-    WITH base AS (
-        SELECT 
-            TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE) as fecha_dt,
-            TRY_CAST(fpd2 AS INTEGER) as fpd2_val,
-            id_credito
-        FROM 'fpd_gemini.parquet'
-    ),
-    filtrado AS (
-        SELECT * FROM base 
-        WHERE fecha_dt <= (CURRENT_DATE - INTERVAL 2 MONTH)
-    ),
-    agrupado AS (
-        SELECT 
-            strftime(fecha_dt, '%Y-%m') as mes_cosecha,
-            COUNT(id_credito) as total_casos,
-            SUM(fpd2_val) as fpd2_si
-        FROM filtrado
-        WHERE fecha_dt IS NOT NULL
-        GROUP BY 1
-    )
     SELECT 
-        mes_cosecha,
-        total_casos,
-        fpd2_si,
-        (fpd2_si * 100.0 / total_casos) as fpd2_rate
-    FROM agrupado
-    ORDER BY mes_cosecha ASC
+        cosecha, 
+        COUNT(id_credito) as total_casos, 
+        SUM(TRY_CAST(fpd2 AS INTEGER)) as fpd2_si
+    FROM 'fpd_gemini.parquet'
+    WHERE TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE) <= (CURRENT_DATE - INTERVAL 2 MONTH)
+    GROUP BY cosecha
+    ORDER BY cosecha ASC
     """
-    return duckdb.query(query).to_df()
+    df = duckdb.query(query).to_df()
+    
+    # Calcular la tasa fpd2 = 1 / total_casos
+    if not df.empty:
+        df['fpd2_rate'] = (df['fpd2_si'] * 100.0 / df['total_casos'])
+    
+    return df
 
 # --- TÍTULO PRINCIPAL ---
 st.title("📊 FPD Daily: Dashboard de Riesgo")
-st.markdown("Seguimiento de calidad de cartera - **Métrica FPD2**")
+st.markdown("Seguimiento de calidad de cartera - **Variable: Cosecha**")
 
 # 3. Creación de las 4 pestañas
 tab1, tab2, tab3, tab4 = st.tabs([
@@ -71,46 +58,46 @@ with tab1:
         df = get_data_fpd2()
 
         if not df.empty:
-            # KPIs en la parte superior
-            ult_mes = df.iloc[-1]
+            # Indicadores Clave (KPIs) de la última cosecha disponible
+            ult_registro = df.iloc[-1]
             k1, k2, k3 = st.columns(3)
-            k1.metric("Última Cosecha", ult_mes['mes_cosecha'])
-            k2.metric("Casos Evaluados", f"{int(ult_mes['total_casos']):,}")
-            k3.metric("Tasa FPD2", f"{ult_mes['fpd2_rate']:.2f}%")
+            k1.metric("Última Cosecha", ult_registro['cosecha'])
+            k2.metric("Total Casos", f"{int(ult_registro['total_casos']):,}")
+            k3.metric("Tasa FPD2", f"{ult_registro['fpd2_rate']:.2f}%")
 
-            st.markdown("### Tendencia Histórica de FPD2")
-            st.caption("Nota: Se excluyen los últimos 2 meses para asegurar la madurez del indicador.")
+            st.markdown("### Tendencia de FPD2 por Cosecha")
+            st.caption("Filtro aplicado: Fecha de apertura ≤ Mes actual - 2 meses.")
 
-            # CREACIÓN DE LA GRÁFICA ESTILO VINTAGE (Área sombreada)
+            # CREACIÓN DE LA GRÁFICA PROFESIONAL (Estilo Área)
             fig = go.Figure()
 
-            # Añadir la línea con área rellena
+            # Añadimos la serie de datos
             fig.add_trace(go.Scatter(
-                x=df['mes_cosecha'], 
+                x=df['cosecha'], 
                 y=df['fpd2_rate'],
                 mode='lines+markers+text',
-                name='Tasa FPD2',
                 text=df['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
                 textposition="top center",
                 line=dict(color='#1A5276', width=4),
-                marker=dict(size=10, color='#1A5276', symbol='circle'),
-                fill='tozeroy',
-                fillcolor='rgba(26, 82, 118, 0.1)' # Azul muy tenue
+                marker=dict(size=8, color='#1A5276'),
+                fill='tozeroy', # Relleno hacia el eje X
+                fillcolor='rgba(26, 82, 118, 0.12)', # Color azul tenue para el área
+                name='Tasa FPD2'
             ))
 
-            # Ajustes de diseño de la gráfica
+            # Configuración estética de la gráfica
             fig.update_layout(
                 hovermode="x unified",
                 plot_bgcolor='white',
-                margin=dict(l=20, r=20, t=20, b=20),
                 height=500,
+                margin=dict(l=20, r=20, t=20, b=20),
                 xaxis=dict(
-                    title="Mes de Originación (Cosecha)",
+                    title="Cosecha",
                     showgrid=False,
                     linecolor='black'
                 ),
                 yaxis=dict(
-                    title="Porcentaje FPD2",
+                    title="Porcentaje (%)",
                     ticksuffix="%",
                     gridcolor='#f0f0f0',
                     zeroline=False
@@ -120,12 +107,12 @@ with tab1:
             st.plotly_chart(fig, use_container_width=True)
             
         else:
-            st.warning("No hay suficientes datos históricos para mostrar la tendencia (mínimo 2 meses de antigüedad requeridos).")
+            st.warning("No se encontraron datos para los criterios seleccionados.")
 
     except Exception as e:
-        st.error(f"Error en el procesamiento: {e}")
+        st.error(f"Error al procesar la variable 'cosecha': {e}")
 
-# --- PESTAÑAS RESTANTES (Vacías como solicitaste) ---
+# --- PESTAÑAS RESTANTES (Vacias) ---
 with tab2:
     pass
 
