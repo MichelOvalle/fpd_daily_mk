@@ -17,20 +17,19 @@ st.set_page_config(
     page_icon="📊"
 )
 
-# Estilo global para leyendas debajo del eje X
+# Estilo global para leyendas debajo del eje X (Tu estándar)
 LEGEND_BOTTOM = dict(
     orientation="h",
     yanchor="top",
-    y=-0.3, # Ajustado para dar espacio a etiquetas del eje X
+    y=-0.3,
     xanchor="center",
     x=0.5
 )
 
-# 2. Carga de opciones para las listas desplegables (filtros)
+# 2. Carga de opciones iniciales (Manejo de Nulos incluido)
 @st.cache_data
 def get_filter_options():
     con = duckdb.connect()
-    # Limpiamos nulos desde la base para que el sorted() no falle
     df_opt = con.execute("""
         SELECT DISTINCT 
             COALESCE(unidad_regional, 'N/A') as unidad_regional, 
@@ -41,7 +40,7 @@ def get_filter_options():
     """).df()
     return df_opt
 
-# 3. Función principal de datos con filtros aplicados
+# 3. Función de procesamiento con filtros SQL
 @st.cache_data
 def get_filtered_data(regionales, sucursales, productos, tipos):
     def list_to_sql(lista):
@@ -88,49 +87,32 @@ def get_filtered_data(regionales, sucursales, productos, tipos):
     """
     return duckdb.query(query).to_df()
 
-# --- SIDEBAR (FILTROS ESTILO LISTA DESPLEGABLE) ---
-st.sidebar.header("🎯 Filtros de Cartera")
-opt = get_filter_options()
+# --- INTERFAZ ---
+st.title("📊 FPD Daily: Monitor de Calidad de Cartera")
 
-# Usamos multiselect que actúa como lista desplegable con búsqueda
-sel_regional = st.sidebar.multiselect(
-    "🌍 Unidad Regional", 
-    options=sorted(opt['unidad_regional'].unique()), 
-    default=opt['unidad_regional'].unique(),
-    help="Selecciona una o varias regiones"
-)
-
-suc_disp = opt[opt['unidad_regional'].isin(sel_regional)]['sucursal'].unique()
-sel_sucursal = st.sidebar.multiselect(
-    "🏢 Sucursal", 
-    options=sorted(suc_disp), 
-    default=suc_disp,
-    help="Selecciona sucursales específicas"
-)
-
-sel_producto = st.sidebar.multiselect(
-    "📦 Producto", 
-    options=sorted(opt['producto_agrupado'].unique()), 
-    default=opt['producto_agrupado'].unique()
-)
-
-sel_tipo = st.sidebar.multiselect(
-    "👤 Tipo de Cliente", 
-    options=sorted(opt['tipo_cliente'].unique()), 
-    default=opt['tipo_cliente'].unique()
-)
-
-# --- INTERFAZ PRINCIPAL ---
-st.title("📊 FPD Daily: Dashboard de Riesgo")
+# BARRA DE FILTROS SUPERIOR (ESTILO BI)
+with st.expander("🔍 Panel de Filtros", expanded=True):
+    opt = get_filter_options()
+    f1, f2, f3, f4 = st.columns(4)
+    
+    with f1:
+        sel_reg = st.multiselect("Unidad Regional", options=sorted(opt['unidad_regional'].unique()), default=opt['unidad_regional'].unique())
+    with f2:
+        suc_disp = opt[opt['unidad_regional'].isin(sel_reg)]['sucursal'].unique()
+        sel_suc = st.multiselect("Sucursal", options=sorted(suc_disp), default=suc_disp)
+    with f3:
+        sel_prod = st.multiselect("Producto", options=sorted(opt['producto_agrupado'].unique()), default=opt['producto_agrupado'].unique())
+    with f4:
+        sel_tip = st.multiselect("Tipo de Cliente", options=sorted(opt['tipo_cliente'].unique()), default=opt['tipo_cliente'].unique())
 
 tab1, tab2, tab3, tab4 = st.tabs(["📈 Resumen General", "🍇 Análisis de Cosechas", "🏢 Por Sucursal", "📋 Detalle de Datos"])
 
 with tab1:
     try:
-        df_raw = get_filtered_data(sel_regional, sel_sucursal, sel_producto, sel_tipo)
+        df_raw = get_filtered_data(sel_reg, sel_suc, sel_prod, sel_tip)
         
         if not df_raw.empty:
-            # Procesamiento de Dataframes para gráficas
+            # --- PROCESAMIENTO ---
             df_total = df_raw.groupby('cosecha_id').agg({'total_casos':'sum', 'fpd2_si':'sum', 'np_si':'sum'}).reset_index()
             df_total['fpd2_rate'] = (df_total['fpd2_si'] * 100.0 / df_total['total_casos'])
             df_total['np_rate'] = (df_total['np_si'] * 100.0 / df_total['total_casos'])
@@ -159,7 +141,7 @@ with tab1:
 
             st.divider()
 
-            # --- FILA 1: TENDENCIAS (50/50) ---
+            # --- FILA 1 ---
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader("Tendencia Global (FPD2)")
@@ -178,7 +160,7 @@ with tab1:
                 fig2.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
                 st.plotly_chart(fig2, use_container_width=True)
 
-            # --- FILA 2: COMPARATIVAS (50/50) ---
+            # --- FILA 2 ---
             c3, c4 = st.columns(2)
             with c3:
                 st.subheader("Comparativa Interanual (FPD2)")
@@ -198,7 +180,7 @@ with tab1:
                 fig4.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=400, legend=LEGEND_BOTTOM, hovermode="x unified")
                 st.plotly_chart(fig4, use_container_width=True)
 
-            # --- FILA 3: TIPO DE CLIENTE (ANCHO COMPLETO) ---
+            # --- FILA 3 ---
             st.subheader("Tendencia FPD2 por Tipo de Cliente (Excluyendo Formers)")
             fig5 = px.line(df_tipo_graf, x='cosecha_id', y='fpd2_rate', color='tipo_cliente', markers=True,
                            text=df_tipo_graf['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
@@ -230,11 +212,8 @@ with tab1:
                     st.markdown("🟢 **Bottom 10: Menor FPD**")
                     st.dataframe(df_rank.sort_values('fpd2_rate', ascending=True).head(10), column_config=conf, hide_index=True, use_container_width=True)
 
-        else:
-            st.warning("No hay datos para la combinación de filtros seleccionada.")
-
     except Exception as e:
-        st.error(f"Se produjo un error al procesar los filtros: {e}")
+        st.error(f"Error al procesar el dashboard: {e}")
 
 # Pestañas restantes vacías
 with tab2: pass
