@@ -17,7 +17,7 @@ st.set_page_config(
     page_icon="📊"
 )
 
-# Estilo global para leyendas debajo del eje X
+# Estilo global para leyendas debajo del eje X (Tu instrucción preferida)
 LEGEND_BOTTOM = dict(
     orientation="h",
     yanchor="top",
@@ -29,7 +29,7 @@ LEGEND_BOTTOM = dict(
 # 2. Funciones de procesamiento de datos con DuckDB
 @st.cache_data
 def get_main_data():
-    """Obtiene datos de tendencia incluyendo la nueva variable NP."""
+    """Obtiene datos de tendencia incluyendo FPD2, NP y Tipo de Cliente."""
     query = """
     WITH base AS (
         SELECT 
@@ -37,7 +37,8 @@ def get_main_data():
             CASE WHEN fpd2 = 'FPD' THEN 1 ELSE 0 END as fpd2_num,
             CASE WHEN NP = 'NP' THEN 1 ELSE 0 END as np_num,
             id_credito,
-            origen2
+            origen2,
+            tipo_cliente
         FROM 'fpd_gemini.parquet'
     ),
     filtrado AS (
@@ -48,11 +49,12 @@ def get_main_data():
     SELECT 
         strftime(fecha_dt, '%Y%m') as cosecha_id,
         origen2,
+        tipo_cliente,
         COUNT(id_credito) as total_casos,
         SUM(fpd2_num) as fpd2_si,
         SUM(np_num) as np_si
     FROM filtrado
-    GROUP BY 1, 2
+    GROUP BY 1, 2, 3
     ORDER BY cosecha_id ASC
     """
     return duckdb.query(query).to_df()
@@ -89,9 +91,9 @@ def get_yoy_data():
     """
     return duckdb.query(query).to_df()
 
-# --- TÍTULO ---
+# --- INTERFAZ ---
 st.title("📊 FPD Daily: Dashboard de Riesgo")
-st.markdown("Monitor de Calidad de Cartera | Métricas: **FPD2** vs **NP**")
+st.markdown("Análisis Multidimensional de Cartera | Cosechas **YYYYMM**")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📈 Resumen General", "🍇 Análisis de Cosechas", "🏢 Por Sucursal", "📋 Detalle de Datos"])
 
@@ -113,6 +115,12 @@ with tab1:
             df_origen = df_raw.groupby(['cosecha_id', 'origen2']).agg({'total_casos':'sum', 'fpd2_si':'sum'}).reset_index()
             df_origen['fpd2_rate'] = (df_origen['fpd2_si'] * 100.0 / df_origen['total_casos'])
 
+            # Filtrado para la quinta gráfica (Tipo de Cliente ignorando Formers)
+            df_tipo = df_raw[df_raw['tipo_cliente'] != 'Formers'].groupby(['cosecha_id', 'tipo_cliente']).agg({
+                'total_casos':'sum', 'fpd2_si':'sum'
+            }).reset_index()
+            df_tipo['fpd2_rate'] = (df_tipo['fpd2_si'] * 100.0 / df_tipo['total_casos'])
+
             # Variables de tiempo
             lista_cosechas = sorted(df_total['cosecha_id'].unique())
             ultima_cosecha = lista_cosechas[-1]
@@ -128,9 +136,9 @@ with tab1:
 
             st.divider()
 
-            # --- FILA 1: GRÁFICAS INICIALES (50/50) ---
-            col1, col2 = st.columns(2)
-            with col1:
+            # --- FILA 1: GRÁFICAS (50/50) ---
+            c1, c2 = st.columns(2)
+            with c1:
                 st.subheader("Tendencia Global (FPD2)")
                 fig1 = go.Figure()
                 fig1.add_trace(go.Scatter(
@@ -146,7 +154,7 @@ with tab1:
                                    plot_bgcolor='white', height=380, showlegend=True, legend=LEGEND_BOTTOM)
                 st.plotly_chart(fig1, use_container_width=True)
 
-            with col2:
+            with c2:
                 st.subheader("FPD2 por Origen")
                 fig2 = px.line(df_origen, x='cosecha_id', y='fpd2_rate', color='origen2', markers=True,
                                text=df_origen['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
@@ -156,45 +164,50 @@ with tab1:
                                    plot_bgcolor='white', height=380, legend=LEGEND_BOTTOM)
                 st.plotly_chart(fig2, use_container_width=True)
 
-            # --- FILA 2: COMPARATIVA INTERANUAL ---
-            st.subheader("Comportamiento Mensual: Comparativa Interanual (FPD2)")
-            df_yoy['anio'] = df_yoy['anio'].astype(str)
-            fig3 = px.line(
-                df_yoy, x='mes', y='fpd2_rate', color='anio', markers=True,
-                text=df_yoy['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
-                color_discrete_map={'2023': '#BDC3C7', '2024': '#5499C7', '2025': '#1A5276'}
+            # --- FILA 2: COMPARATIVAS (50/50) ---
+            c3, c4 = st.columns(2)
+            with c3:
+                st.subheader("Comparativa Interanual (FPD2)")
+                df_yoy['anio'] = df_yoy['anio'].astype(str)
+                fig3 = px.line(
+                    df_yoy, x='mes', y='fpd2_rate', color='anio', markers=True,
+                    text=df_yoy['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
+                    color_discrete_map={'2023': '#BDC3C7', '2024': '#5499C7', '2025': '#1A5276'}
+                )
+                fig3.update_traces(textposition="top center", line=dict(width=3), marker=dict(size=8, line=dict(width=1, color='white')))
+                fig3.update_layout(
+                    xaxis=dict(tickmode='array', tickvals=['01','02','03','04','05','06','07','08','09','10','11','12'],
+                               ticktext=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'], showgrid=False),
+                    yaxis=dict(ticksuffix="%", gridcolor='#F2F3F4'),
+                    plot_bgcolor='white', height=420, legend=LEGEND_BOTTOM
+                )
+                st.plotly_chart(fig3, use_container_width=True)
+
+            with c4:
+                st.subheader("Correlación: % FPD2 vs % NP")
+                fig4 = go.Figure()
+                fig4.add_trace(go.Scatter(x=df_total['cosecha_id'], y=df_total['fpd2_rate'], mode='lines+markers', name='% FPD2',
+                                          line=dict(color='#1B4F72', width=3), marker=dict(size=8)))
+                fig4.add_trace(go.Scatter(x=df_total['cosecha_id'], y=df_total['np_rate'], mode='lines+markers', name='% NP',
+                                          line=dict(color='#D35400', width=3, dash='dash'), marker=dict(size=8)))
+                fig4.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%", gridcolor='#F2F3F4'),
+                                   plot_bgcolor='white', height=420, legend=LEGEND_BOTTOM, hovermode="x unified")
+                st.plotly_chart(fig4, use_container_width=True)
+
+            # --- FILA 3: TIPO DE CLIENTE (ANCHO COMPLETO) ---
+            st.subheader("Tendencia FPD2 por Tipo de Cliente (Excluyendo Formers)")
+            fig5 = px.line(
+                df_tipo, x='cosecha_id', y='fpd2_rate', color='tipo_cliente', markers=True,
+                text=df_tipo['fpd2_rate'].apply(lambda x: f'{x:.1f}%'),
+                labels={'cosecha_id': 'Cosecha', 'fpd2_rate': '% FPD2', 'tipo_cliente': 'Cliente'},
+                color_discrete_map={'Nuevo': '#7D3C98', 'Renovacion': '#27AE60'} # Púrpura y Verde
             )
-            fig3.update_traces(textposition="top center", line=dict(width=3), marker=dict(size=8, line=dict(width=1, color='white')))
-            fig3.update_layout(
-                xaxis=dict(tickmode='array', tickvals=['01','02','03','04','05','06','07','08','09','10','11','12'],
-                           ticktext=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'], showgrid=False),
-                yaxis=dict(ticksuffix="%", gridcolor='#F2F3F4'),
+            fig5.update_traces(textposition="top center", line=dict(width=4))
+            fig5.update_layout(
+                xaxis=dict(type='category'), yaxis=dict(ticksuffix="%", gridcolor='#F2F3F4'),
                 plot_bgcolor='white', height=450, legend=LEGEND_BOTTOM
             )
-            st.plotly_chart(fig3, use_container_width=True)
-
-            # --- FILA 3: COMPARATIVA FPD VS NP (NUEVA) ---
-            st.subheader("Comparativa de Tasas: % FPD2 vs % NP")
-            fig4 = go.Figure()
-            # Línea FPD2
-            fig4.add_trace(go.Scatter(
-                x=df_total['cosecha_id'], y=df_total['fpd2_rate'],
-                mode='lines+markers', name='% FPD2',
-                line=dict(color='#1B4F72', width=3), marker=dict(size=8)
-            ))
-            # Línea NP
-            fig4.add_trace(go.Scatter(
-                x=df_total['cosecha_id'], y=df_total['np_rate'],
-                mode='lines+markers', name='% NP (No Pagó)',
-                line=dict(color='#D35400', width=3, dash='dash'), marker=dict(size=8)
-            ))
-            fig4.update_layout(
-                xaxis=dict(type='category', title="Cosecha (YYYYMM)"),
-                yaxis=dict(ticksuffix="%", gridcolor='#F2F3F4'),
-                plot_bgcolor='white', height=450, legend=LEGEND_BOTTOM,
-                hovermode="x unified"
-            )
-            st.plotly_chart(fig4, use_container_width=True)
+            st.plotly_chart(fig5, use_container_width=True)
 
             st.divider()
 
