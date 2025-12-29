@@ -94,7 +94,7 @@ sel_suc = st.sidebar.multiselect("🏠 Sucursal", options=suc_disp)
 sel_prod = st.sidebar.multiselect("📦 Producto", options=sorted(opt['producto_agrupado'].unique()))
 sel_tip = st.sidebar.multiselect("👥 Tipo Cliente", options=sorted(opt['tipo_cliente'].unique()))
 
-st.title("📊 Monitor de Riesgo Crediticio")
+st.title("📊 Monitor Estratégico de Riesgo")
 tabs = st.tabs(["📈 Monitor FPD", "💼 Resumen Ejecutivo", "💡 Insights Estratégicos", "📋 Datos"])
 
 df_main = get_main_data(sel_reg, sel_suc, sel_prod, sel_tip)
@@ -143,28 +143,7 @@ with tabs[0]:
             fig4.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig4, use_container_width=True)
 
-        st.subheader("Tipo Cliente (Sin Formers)")
-        df_tc = df_main[df_main['tipo_cliente'] != 'Formers'].groupby(['cosecha_id', 'tipo_cliente']).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
-        df_tc['rate'] = (df_tc['fpd2_num'] * 100 / df_tc['id_credito'])
-        fig5 = px.line(df_tc, x='cosecha_id', y='rate', color='tipo_cliente', markers=True)
-        fig5.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=400, legend=LEGEND_BOTTOM)
-        st.plotly_chart(fig5, use_container_width=True)
-
-        st.divider()
-        cosechas = sorted(df_main['cosecha_id'].unique())
-        ant_c = cosechas[-2] if len(cosechas) > 1 else cosechas[-1]
-        df_r_c = df_main[df_main['cosecha_id'] == cosechas[-1]].groupby('sucursal').agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
-        df_r_c['rate'] = (df_r_c['fpd2_num'] * 100 / df_r_c['id_credito'])
-        df_r_p = df_main[df_main['cosecha_id'] == ant_c].groupby('sucursal').agg({'fpd2_num':'sum', 'id_credito':'count'}).reset_index()
-        df_r_p['rate_ant'] = (df_r_p['fpd2_num'] * 100 / df_r_p['id_credito'])
-        df_rf = pd.merge(df_r_c, df_r_p[['sucursal', 'rate_ant']], on='sucursal', how='left')
-        st.subheader(f"🏆 Rankings Sucursales - Cosecha {cosechas[-1]}")
-        cr1, cr2 = st.columns(2)
-        conf = {"sucursal":"Sucursal", "id_credito":"Créditos", "rate":st.column_config.NumberColumn("% FPD", format="%.2f%%"), "rate_ant":st.column_config.NumberColumn("% Ant", format="%.2f%%")}
-        cr1.dataframe(df_rf.sort_values('rate', ascending=False).head(10), column_config=conf, hide_index=True, use_container_width=True)
-        cr2.dataframe(df_rf.sort_values('rate', ascending=True).head(10), column_config=conf, hide_index=True, use_container_width=True)
-
-# --- TAB 2: RESUMEN EJECUTIVO ---
+# --- TAB 2: RESUMEN EJECUTIVO (Truco de redacción + Tablas) ---
 with tabs[1]:
     st.header("💼 Resumen Ejecutivo Gerencial")
     def render_exec_block(field, title, dim_label):
@@ -190,38 +169,45 @@ with tabs[1]:
 with tabs[2]:
     if not df_main.empty:
         st.header("💡 Insights Estratégicos")
-        
-        # 0. Identificar última cosecha dinámica
         ult_cosecha = df_main['cosecha_id'].max()
         mes_nombre_ult = MESES_NOMBRE.get(ult_cosecha[-2:], 'N/A').capitalize()
 
-        # 1. Heatmap (6 Meses - Verde = Bajo, Rojo = Alto)
-        st.subheader("📍 Tendencia de Riesgo Regional (Tendencia 6 Meses)")
+        # 1. Heatmap Regional (Excluyendo Nóminas y con escala invertida)
+        st.subheader("📍 Tendencia de Riesgo Regional (Últimos 6 Meses)")
         u6 = sorted(df_main['cosecha_id'].unique())[-6:]
-        df_h = df_main[df_main['cosecha_id'].isin(u6)].groupby(['unidad_regional','cosecha_id']).agg({'fpd2_num':'sum','id_credito':'count'}).reset_index()
+        # Filtro para ignorar nóminas específicamente en este gráfico
+        df_h_base = df_main[df_main['cosecha_id'].isin(u6)]
+        df_h_base = df_h_base[~df_h_base['producto_agrupado'].str.upper().str.contains('NOMINA')]
+        
+        df_h = df_h_base.groupby(['unidad_regional','cosecha_id']).agg({'fpd2_num':'sum','id_credito':'count'}).reset_index()
         df_h['rate'] = (df_h['fpd2_num']*100/df_h['id_credito'])
+        
         st.dataframe(df_h.pivot(index='unidad_regional', columns='cosecha_id', values='rate').style.background_gradient(cmap='RdYlGn_r').format("{:.2f}%"), use_container_width=True)
         
         st.divider()
 
-        # 2. Pareto Sucursales (SÓLO ÚLTIMA COSECHA)
-        st.subheader(f"🏢 Pareto de Sucursales (FPD Casos {mes_nombre_ult} {ult_cosecha[:4]})")
+        # 2. Pareto 80/20 Visual (Última Cosecha)
+        st.subheader(f"🏢 Pareto de Sucursales: Concentración 80/20 (Casos FPD {mes_nombre_ult})")
         df_p = df_main[df_main['cosecha_id'] == ult_cosecha].groupby('sucursal').agg({'fpd2_num':'sum'}).reset_index().sort_values('fpd2_num', ascending=False)
-        fig_p = px.bar(df_p.head(20), x='sucursal', y='fpd2_num', 
-                       labels={'sucursal': 'Sucursal', 'fpd2_num': 'Casos FPD'},
-                       color_discrete_sequence=['#2E86C1'])
-        fig_p.update_layout(plot_bgcolor='white', xaxis_tickangle=-45, height=450)
+        
+        # Lógica para resaltar el 80/20
+        df_p['pct_acum'] = (df_p['fpd2_num'].cumsum() / df_p['fpd2_num'].sum()) * 100
+        df_p['Grupo'] = df_p['pct_acum'].shift(1).fillna(0).apply(lambda x: 'Foco (Top 80% Riesgo)' if x < 80 else 'Otros')
+        
+        fig_p = px.bar(df_p.head(20), x='sucursal', y='fpd2_num', color='Grupo',
+                       color_discrete_map={'Foco (Top 80% Riesgo)': '#C0392B', 'Otros': '#AED6F1'},
+                       labels={'sucursal': 'Sucursal', 'fpd2_num': 'Casos FPD', 'Grupo': 'Segmento'})
+        
+        fig_p.update_layout(plot_bgcolor='white', xaxis_tickangle=-45, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig_p, use_container_width=True)
-        st.caption(f"Análisis enfocado exclusivamente en la cosecha de {mes_nombre_ult} ({ult_cosecha}).")
+        st.info("💡 Las barras **rojas** representan las sucursales que acumulan el primer 80% de los casos de riesgo. Atender estas oficinas resuelve la mayoría del problema.")
 
         st.divider()
 
-        # 3. Combo Chart: Volumen y Tasa FPD (SÓLO ÚLTIMA COSECHA)
-        st.subheader(f"💰 Volumen y Calidad por Rango de Monto ({mes_nombre_ult} {ult_cosecha[:4]})")
+        # 3. Combo Chart Montos (Última Cosecha)
+        st.subheader(f"💰 Volumen y Calidad por Rango de Monto ({mes_nombre_ult})")
         bins = [0, 3000, 5000, 8000, 12000, 20000, float('inf')]
         labels = ['$0-$3k', '$3k-$5k', '$5k-$8k', '$8k-$12k', '$12k-$20k', '>$20k']
-        
-        # Filtramos por última cosecha
         df_s_raw = df_main[df_main['cosecha_id'] == ult_cosecha].copy()
         df_s_raw['rango'] = pd.cut(df_s_raw['monto_otorgado'], bins=bins, labels=labels, include_lowest=True)
         df_s = df_s_raw.groupby('rango', observed=True).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
@@ -234,6 +220,3 @@ with tabs[2]:
         fig_combo.update_yaxes(title_text="Cantidad de Créditos", secondary_y=False)
         fig_combo.update_yaxes(title_text="% Tasa FPD2", secondary_y=True, ticksuffix="%", range=[0, df_s['rate'].max()*1.5 if not df_s['rate'].empty else 10])
         st.plotly_chart(fig_combo, use_container_width=True)
-        st.caption(f"Visualización de la distribución de colocación y su riesgo correspondiente para la cosecha de {mes_nombre_ult}.")
-
-with tabs[3]: st.info("Pestaña de Datos vacía.")
