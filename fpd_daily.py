@@ -112,36 +112,35 @@ with tabs[0]:
         k3.metric("Tasa FPD2", f"{ult['rate']:.2f}%")
         k4.metric("Tasa NP", f"{ult['np_rate']:.2f}%")
         st.divider()
-        
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Tendencia Global (FPD2)")
-            fig1 = px.line(df_t, x='cosecha_id', y='rate', markers=True, text=df_t['rate'].apply(lambda x: f'{x:.1f}%'))
-            fig1.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350)
-            st.plotly_chart(fig1, use_container_width=True)
+            f1 = px.line(df_t, x='cosecha_id', y='rate', markers=True, text=df_t['rate'].apply(lambda x: f'{x:.1f}%'))
+            f1.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350)
+            st.plotly_chart(f1, use_container_width=True)
         with c2:
             st.subheader("FPD2 por Origen")
             df_o = df_main.groupby(['cosecha_id', 'origen2']).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
             df_o['rate'] = (df_o['fpd2_num'] * 100 / df_o['id_credito'])
-            fig2 = px.line(df_o, x='cosecha_id', y='rate', color='origen2', markers=True)
-            fig2.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
-            st.plotly_chart(fig2, use_container_width=True)
-
+            f2 = px.line(df_o, x='cosecha_id', y='rate', color='origen2', markers=True)
+            f2.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
+            st.plotly_chart(f2, use_container_width=True)
+        
         c3, c4 = st.columns(2)
         with c3:
             st.subheader("Comparativa Interanual")
             df_y = df_main.groupby(['anio', 'mes']).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
             df_y['rate'] = (df_y['fpd2_num'] * 100 / df_y['id_credito'])
-            fig3 = px.line(df_y[df_y['anio'].isin([2023, 2024, 2025])], x='mes', y='rate', color=df_y['anio'].astype(str), markers=True)
-            fig3.update_layout(xaxis=dict(ticktext=list(MESES_NOMBRE.values()), tickvals=list(MESES_NOMBRE.keys())), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
-            st.plotly_chart(fig3, use_container_width=True)
+            f3 = px.line(df_y[df_y['anio'].isin([2023, 2024, 2025])], x='mes', y='rate', color=df_y['anio'].astype(str), markers=True)
+            f3.update_layout(xaxis=dict(ticktext=list(MESES_NOMBRE.values()), tickvals=list(MESES_NOMBRE.keys())), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
+            st.plotly_chart(f3, use_container_width=True)
         with c4:
             st.subheader("FPD2 vs NP")
-            fig4 = go.Figure()
-            fig4.add_trace(go.Scatter(x=df_t['cosecha_id'], y=df_t['rate'], name='% FPD2'))
-            fig4.add_trace(go.Scatter(x=df_t['cosecha_id'], y=df_t['np_rate'], name='% NP', line=dict(dash='dash')))
-            fig4.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
-            st.plotly_chart(fig4, use_container_width=True)
+            f4 = go.Figure()
+            f4.add_trace(go.Scatter(x=df_t['cosecha_id'], y=df_t['rate'], name='% FPD2'))
+            f4.add_trace(go.Scatter(x=df_t['cosecha_id'], y=df_t['np_rate'], name='% NP', line=dict(dash='dash')))
+            f4.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
+            st.plotly_chart(f4, use_container_width=True)
 
 # --- TAB 2: RESUMEN EJECUTIVO (Truco de redacción + Tablas) ---
 with tabs[1]:
@@ -169,54 +168,60 @@ with tabs[1]:
 with tabs[2]:
     if not df_main.empty:
         st.header("💡 Insights Estratégicos")
-        ult_cosecha = df_main['cosecha_id'].max()
-        mes_nombre_ult = MESES_NOMBRE.get(ult_cosecha[-2:], 'N/A').capitalize()
+        lista_c = sorted(df_main['cosecha_id'].unique())
+        ult_c = lista_c[-1]
+        ant_c = lista_c[-2] if len(lista_c) > 1 else ult_c
+        mes_u = MESES_NOMBRE.get(ult_c[-2:], 'N/A').capitalize()
+        mes_a = MESES_NOMBRE.get(ant_c[-2:], 'N/A').capitalize()
 
         # 1. Heatmap Regional (Excluyendo Nóminas y con escala invertida)
         st.subheader("📍 Tendencia de Riesgo Regional (Últimos 6 Meses)")
-        u6 = sorted(df_main['cosecha_id'].unique())[-6:]
-        # Filtro para ignorar nóminas específicamente en este gráfico
+        u6 = lista_c[-6:]
         df_h_base = df_main[df_main['cosecha_id'].isin(u6)]
         df_h_base = df_h_base[~df_h_base['producto_agrupado'].str.upper().str.contains('NOMINA')]
-        
         df_h = df_h_base.groupby(['unidad_regional','cosecha_id']).agg({'fpd2_num':'sum','id_credito':'count'}).reset_index()
         df_h['rate'] = (df_h['fpd2_num']*100/df_h['id_credito'])
-        
         st.dataframe(df_h.pivot(index='unidad_regional', columns='cosecha_id', values='rate').style.background_gradient(cmap='RdYlGn_r').format("{:.2f}%"), use_container_width=True)
         
         st.divider()
 
         # 2. Pareto 80/20 Visual (Última Cosecha)
-        st.subheader(f"🏢 Pareto de Sucursales: Concentración 80/20 (Casos FPD {mes_nombre_ult})")
-        df_p = df_main[df_main['cosecha_id'] == ult_cosecha].groupby('sucursal').agg({'fpd2_num':'sum'}).reset_index().sort_values('fpd2_num', ascending=False)
-        
-        # Lógica para resaltar el 80/20
-        df_p['pct_acum'] = (df_p['fpd2_num'].cumsum() / df_p['fpd2_num'].sum()) * 100
-        df_p['Grupo'] = df_p['pct_acum'].shift(1).fillna(0).apply(lambda x: 'Foco (Top 80% Riesgo)' if x < 80 else 'Otros')
-        
-        fig_p = px.bar(df_p.head(20), x='sucursal', y='fpd2_num', color='Grupo',
-                       color_discrete_map={'Foco (Top 80% Riesgo)': '#C0392B', 'Otros': '#AED6F1'},
-                       labels={'sucursal': 'Sucursal', 'fpd2_num': 'Casos FPD', 'Grupo': 'Segmento'})
-        
+        st.subheader(f"🏢 Pareto de Sucursales: Concentración 80/20 (Casos FPD {mes_u})")
+        df_p = df_main[df_main['cosecha_id'] == ult_c].groupby('sucursal').agg({'fpd2_num':'sum'}).reset_index().sort_values('fpd2_num', ascending=False)
+        df_p['pct_acum'] = (df_p['fpd2_num'].cumsum() / df_p['fpd2_num'].sum() * 100) if not df_p.empty else 0
+        df_p['Grupo'] = df_p['pct_acum'].shift(1).fillna(0).apply(lambda x: f'Foco (Top 80% Riesgo {mes_u})' if x < 80 else 'Otros')
+        fig_p = px.bar(df_p.head(20), x='sucursal', y='fpd2_num', color='Grupo', color_discrete_map={f'Foco (Top 80% Riesgo {mes_u})': '#C0392B', 'Otros': '#AED6F1'})
         fig_p.update_layout(plot_bgcolor='white', xaxis_tickangle=-45, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig_p, use_container_width=True)
-        st.info("💡 Las barras **rojas** representan las sucursales que acumulan el primer 80% de los casos de riesgo. Atender estas oficinas resuelve la mayoría del problema.")
 
         st.divider()
 
-        # 3. Combo Chart Montos (Última Cosecha)
-        st.subheader(f"💰 Volumen y Calidad por Rango de Monto ({mes_nombre_ult})")
+        # 3. PRUEBA: Gráfica Comparativa Monto (Oct vs Sep)
+        st.subheader(f"💰 Volumen y Calidad: Comparativa {mes_u} vs {mes_a}")
         bins = [0, 3000, 5000, 8000, 12000, 20000, float('inf')]
         labels = ['$0-$3k', '$3k-$5k', '$5k-$8k', '$8k-$12k', '$12k-$20k', '>$20k']
-        df_s_raw = df_main[df_main['cosecha_id'] == ult_cosecha].copy()
-        df_s_raw['rango'] = pd.cut(df_s_raw['monto_otorgado'], bins=bins, labels=labels, include_lowest=True)
-        df_s = df_s_raw.groupby('rango', observed=True).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
+        
+        # Procesar ambos meses
+        df_comp = df_main[df_main['cosecha_id'].isin([ult_c, ant_c])].copy()
+        df_comp['rango'] = pd.cut(df_comp['monto_otorgado'], bins=bins, labels=labels, include_lowest=True)
+        df_s = df_comp.groupby(['cosecha_id', 'rango'], observed=True).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
         df_s['rate'] = (df_s['fpd2_num']*100/df_s['id_credito'])
         
+        df_ult = df_s[df_s['cosecha_id'] == ult_c]
+        df_ant = df_s[df_s['cosecha_id'] == ant_c]
+
         fig_combo = make_subplots(specs=[[{"secondary_y": True}]])
-        fig_combo.add_trace(go.Bar(x=df_s['rango'], y=df_s['id_credito'], name="Créditos Colocados", marker_color='#AED6F1', text=df_s['id_credito'], textposition='auto'), secondary_y=False)
-        fig_combo.add_trace(go.Scatter(x=df_s['rango'], y=df_s['rate'], name="% Tasa FPD2", mode='lines+markers+text', text=df_s['rate'].apply(lambda x: f'{x:.1f}%'), line=dict(color='#C0392B', width=3)), secondary_y=True)
-        fig_combo.update_layout(plot_bgcolor='white', legend=LEGEND_BOTTOM, height=500)
+        
+        # Barras (Volumen)
+        fig_combo.add_trace(go.Bar(x=df_ult['rango'], y=df_ult['id_credito'], name=f"Créditos {mes_u}", marker_color='#2E86C1'), secondary_y=False)
+        fig_combo.add_trace(go.Bar(x=df_ant['rango'], y=df_ant['id_credito'], name=f"Créditos {mes_a}", marker_color='#AED6F1'), secondary_y=False)
+        
+        # Líneas (Riesgo)
+        fig_combo.add_trace(go.Scatter(x=df_ult['rango'], y=df_ult['rate'], name=f"% FPD {mes_u}", mode='lines+markers', line=dict(color='#C0392B', width=4)), secondary_y=True)
+        fig_combo.add_trace(go.Scatter(x=df_ant['rango'], y=df_ant['rate'], name=f"% FPD {mes_a}", mode='lines+markers', line=dict(color='#E67E22', width=2, dash='dash')), secondary_y=True)
+        
+        fig_combo.update_layout(plot_bgcolor='white', barmode='group', height=550, legend=LEGEND_BOTTOM)
         fig_combo.update_yaxes(title_text="Cantidad de Créditos", secondary_y=False)
-        fig_combo.update_yaxes(title_text="% Tasa FPD2", secondary_y=True, ticksuffix="%", range=[0, df_s['rate'].max()*1.5 if not df_s['rate'].empty else 10])
+        fig_combo.update_yaxes(title_text="% Tasa FPD2", secondary_y=True, ticksuffix="%", range=[0, df_s['rate'].max()*1.3 if not df_s['rate'].empty else 10])
         st.plotly_chart(fig_combo, use_container_width=True)
+        st.caption(f"Análisis comparativo: Las barras muestran cuánto se colocó y las líneas qué tan riesgoso fue cada rango en {mes_u} vs {mes_a}.")
