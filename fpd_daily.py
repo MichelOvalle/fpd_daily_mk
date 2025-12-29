@@ -93,20 +93,15 @@ sel_tip = st.sidebar.multiselect("👥 Tipo Cliente", options=sorted(opt['tipo_c
 
 df_main = get_main_data(sel_reg, sel_suc, sel_prod, sel_tip)
 
-# --- 4. LÓGICA DE FILTRADO GLOBAL (IGNORAR MÁXIMO PARA ANÁLISIS) ---
+# --- 4. LÓGICA DE FILTRADO GLOBAL (IGNORAR MÁXIMO) ---
 if not df_main.empty:
-    # Determinamos la cosecha máxima real para ignorarla en Tabs 1, 2 y 3
-    max_cosecha_real = df_main['cosecha_id'].max()
+    max_c_real = df_main['cosecha_id'].max()
+    df_fpd = df_main[df_main['cosecha_id'] < max_c_real].copy()
     
-    # Creamos el dataframe de trabajo que excluye el último mes
-    df_fpd = df_main[df_main['cosecha_id'] < max_cosecha_real].copy()
-    
-    # Redefinimos identificadores basados en el nuevo universo
     lista_cosechas = sorted(df_fpd['cosecha_id'].unique())
-    ult_c_id = lista_cosechas[-1] if lista_cosechas else None
-    ant_c_id = lista_cosechas[-2] if len(lista_cosechas) > 1 else ult_c_id
-    
-    if ult_c_id:
+    if lista_cosechas:
+        ult_c_id = lista_cosechas[-1]
+        ant_c_id = lista_cosechas[-2] if len(lista_cosechas) > 1 else ult_c_id
         mes_u_nombre = MESES_NOMBRE.get(ult_c_id[-2:], 'N/A').capitalize()
         mes_a_nombre = MESES_NOMBRE.get(ant_c_id[-2:], 'N/A').capitalize()
 
@@ -147,6 +142,23 @@ with tabs[0]:
         fig3.update_traces(textposition="top center").update_layout(xaxis=dict(ticktext=list(MESES_NOMBRE.values()), tickvals=list(MESES_NOMBRE.keys())), plot_bgcolor='white', height=450, legend=LEGEND_BOTTOM)
         st.plotly_chart(fig3, use_container_width=True)
 
+        st.subheader("4. Histórico Indicadores (Últimas 24 Cosechas)")
+        df_t_24 = df_t.tail(24)
+        fig4 = go.Figure()
+        fig4.add_trace(go.Scatter(x=df_t_24['cosecha_id'], y=df_t_24['%FPD'], name='% FPD', mode='lines+markers+text', text=df_t_24['%FPD'].apply(lambda x: f'{x:.1f}%'), textposition="top center"))
+        fig4.add_trace(go.Scatter(x=df_t_24['cosecha_id'], y=df_t_24['np_rate'], name='% NP', mode='lines+markers+text', text=df_t_24['np_rate'].apply(lambda x: f'{x:.1f}%'), textposition="bottom center", line=dict(dash='dash')))
+        fig4.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=450, legend=LEGEND_BOTTOM)
+        st.plotly_chart(fig4, use_container_width=True)
+
+        st.subheader("5. Comportamiento %FPD por tipo de cliente")
+        u24 = sorted(df_fpd['cosecha_id'].unique())[-24:]
+        df_tc = df_fpd[(df_fpd['tipo_cliente'] != 'Formers') & (df_fpd['cosecha_id'].isin(u24))].groupby(['cosecha_id', 'tipo_cliente']).agg({'id_credito':'count', 'fpd_num':'sum'}).reset_index()
+        df_tc['%FPD'] = (df_tc['fpd_num'] * 100 / df_tc['id_credito'])
+        fig5 = px.line(df_tc, x='cosecha_id', y='%FPD', color='tipo_cliente', markers=True, text=df_tc['%FPD'].apply(lambda x: f'{x:.1f}%'))
+        fig5.update_traces(textposition="top center").update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=450, legend=LEGEND_BOTTOM)
+        st.plotly_chart(fig5, use_container_width=True)
+
+        st.divider()
         # Rankings Sucursales
         df_r_c = df_fpd[df_fpd['cosecha_id'] == ult_c_id].groupby('sucursal').agg({'id_credito':'count', 'fpd_num':'sum'}).reset_index()
         df_r_c['rate'] = (df_r_c['fpd_num'] * 100 / df_r_c['id_credito'])
@@ -160,24 +172,25 @@ with tabs[0]:
         cr1.markdown("**🔴 Top 10 Riesgo**"); cr1.dataframe(df_rf.sort_values('rate', ascending=False).head(10), column_config=conf_rank, hide_index=True, use_container_width=True)
         cr2.markdown("**🟢 Bottom 10 Riesgo**"); cr2.dataframe(df_rf.sort_values('rate', ascending=True).head(10), column_config=conf_rank, hide_index=True, use_container_width=True)
 
-# --- TAB 2: RESUMEN EJECUTIVO (IGNORANDO MÁXIMO) ---
+# --- TAB 2: RESUMEN EJECUTIVO ---
 with tabs[1]:
     if not df_fpd.empty:
         st.header("💼 Resumen Ejecutivo Gerencial")
         def render_exec_block(field, dim_label):
             df_e_raw = get_executive_data(field)
-            # Filtramos para ignorar la cosecha máxima
-            df_e = df_e_raw[df_e_raw['cosecha_id'] < max_cosecha_real].copy()
+            df_e = df_e_raw[df_e_raw['cosecha_id'] < max_c_real].copy()
             
             if not df_e.empty:
                 lista_c_e = sorted(df_e['cosecha_id'].unique())
                 u_e = lista_c_e[-1]; a_e = lista_c_e[-2] if len(lista_c_e) > 1 else u_e
                 m_u = MESES_NOMBRE.get(u_e[-2:]); m_a = MESES_NOMBRE.get(a_e[-2:])
-                df_u = df_e[df_e['cosecha_id'] == u_e].sort_values('fpd_rate'); df_a = df_e[df_e['cosecha_id'] == a_e].sort_values('fpd_rate')
+                df_u = df_e[df_e['cosecha_id'] == u_e].sort_values('fpd_rate')
+                df_a = df_e[df_e['cosecha_id'] == a_e].sort_values('fpd_rate')
                 
+                # --- REDACCIÓN DINÁMICA RESTAURADA ---
                 c1, c2 = st.columns(2)
-                c1.success(f"**{dim_label} Destacada:** La mejor es **{df_u.iloc[0]['dimension']}** con un **{df_u.iloc[0]['fpd_rate']:.2f}%** en **{m_u}**.")
-                c2.error(f"**{dim_label} Riesgosa:** La de mayor riesgo es **{df_u.iloc[-1]['dimension']}** con un **{df_u.iloc[-1]['fpd_rate']:.2f}%** en **{m_u}**.")
+                c1.success(f"**{dim_label} Destacada:** La mejor es **{df_u.iloc[0]['dimension']}** con un **{df_u.iloc[0]['fpd_rate']:.2f}%** en **{m_u}**, mientras que en **{m_a}** fue **{df_a.iloc[0]['dimension']}** con un **{df_a.iloc[0]['fpd_rate']:.2f}%**.")
+                c2.error(f"**{dim_label} Riesgosa:** La de mayor riesgo es **{df_u.iloc[-1]['dimension']}** con un **{df_u.iloc[-1]['fpd_rate']:.2f}%** en **{m_u}**, mientras que en **{m_a}** fue **{df_a.iloc[-1]['dimension']}** con un **{df_a.iloc[-1]['fpd_rate']:.2f}%**.")
                 
                 df_tab = pd.merge(df_u[['dimension', 'total_vol', 'fpd_si', 'fpd_rate']], df_a[['dimension', 'total_vol', 'fpd_si', 'fpd_rate']].rename(columns={'total_vol':'vol_ant','fpd_si':'fpd_ant','fpd_rate':'rate_ant'}), on='dimension', how='left')
                 st.dataframe(df_tab.style.background_gradient(subset=['fpd_rate','rate_ant'], cmap='YlOrRd').format({'fpd_rate':'{:.2f}%','rate_ant':'{:.2f}%','fpd_si':'{:,.0f}','fpd_ant':'{:,.0f}','total_vol':'{:,.0f}','vol_ant':'{:,.0f}'}),
@@ -185,12 +198,10 @@ with tabs[1]:
                 st.divider()
         render_exec_block('unidad_regional', 'Regional'); render_exec_block('producto_agrupado', 'Producto'); render_exec_block('sucursal', 'Sucursal')
 
-# --- TAB 3: INSIGHTS ESTRATÉGICOS (IGNORANDO MÁXIMO) ---
+# --- TAB 3: INSIGHTS ESTRATÉGICOS ---
 with tabs[2]:
     if not df_fpd.empty:
         st.header("💡 Insights Estratégicos")
-        
-        # Heatmap (6 meses atrás desde el penúltimo)
         st.subheader("📍 Tendencia de Riesgo Regional (6 Meses)")
         u6 = lista_cosechas[-6:]
         df_h = df_fpd[df_fpd['cosecha_id'].isin(u6) & ~df_fpd['producto_agrupado'].str.upper().str.contains('NOMINA')].groupby(['unidad_regional','cosecha_id']).agg({'fpd_num':'sum','id_credito':'count'}).reset_index()
@@ -198,14 +209,12 @@ with tabs[2]:
         pivot_h = df_h.pivot(index='unidad_regional', columns='cosecha_id', values='%FPD').sort_values(by=u6[-1], ascending=True)
         st.dataframe(pivot_h.style.background_gradient(cmap='RdYlGn_r').format("{:.2f}%"), use_container_width=True)
         
-        # Pareto
         st.subheader(f"🏢 Pareto de Sucursales (Casos FPD {mes_u_nombre})")
         df_p = df_fpd[df_fpd['cosecha_id'] == ult_c_id].groupby('sucursal').agg({'fpd_num':'sum'}).reset_index().sort_values('fpd_num', ascending=False)
         fig_p = px.bar(df_p.head(20), x='sucursal', y='fpd_num', text='fpd_num', color_discrete_sequence=['#C0392B'])
         fig_p.update_traces(textposition='outside').update_layout(plot_bgcolor='white', xaxis_tickangle=-45, yaxis_title="Casos FPD")
         st.plotly_chart(fig_p, use_container_width=True)
         
-        # Combo Volumen y Calidad
         st.subheader(f"💰 Volumen y Calidad: Comparativa {mes_u_nombre} vs {mes_a_nombre}")
         bins = [0, 3000, 5000, 8000, 12000, 20000, float('inf')]
         labels = ['$0-$3k', '$3k-$5k', '$5k-$8k', '$8k-$12k', '$12k-$20k', '>$20k']
@@ -223,10 +232,9 @@ with tabs[2]:
         fig_combo.update_layout(plot_bgcolor='white', barmode='group', height=550, legend=LEGEND_BOTTOM)
         st.plotly_chart(fig_combo, use_container_width=True)
 
-# --- TAB 4: EXPORTAR (MANTIENE TODO EL DATASET PARA REVISIÓN) ---
+# --- TAB 4: EXPORTAR ---
 with tabs[3]:
     if not df_main.empty:
-        # Aquí permitimos ver la cosecha máxima por si el usuario quiere auditar datos nuevos
         st.header(f"📥 Exportar Detalle FPD")
         cosecha_export = st.selectbox("Selecciona la cosecha a exportar:", sorted(df_main['cosecha_id'].unique(), reverse=True))
         df_exp = df_main[(df_main['cosecha_id'] == cosecha_export) & (df_main['fpd2'] == 'FPD')].copy()
