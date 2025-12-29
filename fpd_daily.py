@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # Intentar importar duckdb
 try:
@@ -98,7 +99,7 @@ tabs = st.tabs(["📈 Monitor FPD", "💼 Resumen Ejecutivo", "💡 Insights Est
 
 df_main = get_main_data(sel_reg, sel_suc, sel_prod, sel_tip)
 
-# --- TAB 1: MONITOR FPD ---
+# --- TAB 1: MONITOR FPD (Restaurado) ---
 with tabs[0]:
     if not df_main.empty:
         df_t = df_main.groupby('cosecha_id').agg({'id_credito':'count', 'fpd2_num':'sum', 'np_num':'sum'}).reset_index()
@@ -142,7 +143,7 @@ with tabs[0]:
             fig4.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig4, use_container_width=True)
 
-# --- TAB 2: RESUMEN EJECUTIVO ---
+# --- TAB 2: RESUMEN EJECUTIVO (Truco de redacción + Tablas) ---
 with tabs[1]:
     st.header("💼 Resumen Ejecutivo Gerencial")
     def render_exec_block(field, title, dim_label):
@@ -164,7 +165,7 @@ with tabs[1]:
     render_exec_block('producto_agrupado', "Producto", "Producto")
     render_exec_block('sucursal', "Sucursal", "Sucursal")
 
-# --- TAB 3: INSIGHTS ESTRATÉGICOS ---
+# --- TAB 3: INSIGHTS ESTRATÉGICOS (Combo Chart de Monto) ---
 with tabs[2]:
     if not df_main.empty:
         st.header("💡 Insights Estratégicos")
@@ -184,16 +185,42 @@ with tabs[2]:
         fig_p.update_layout(yaxis2=dict(overlaying="y", side="right", range=[0,110]), plot_bgcolor='white', legend=LEGEND_BOTTOM, height=500)
         st.plotly_chart(fig_p, use_container_width=True)
 
-        # 3. Sensibilidad Monto (RANGOS SOLICITADOS)
-        st.subheader("💰 Riesgo por Rango de Monto")
-        # Definición de bins exactos
+        # 3. SENSIBILIDAD MONTO (Gráfica de Doble Eje: Volumen + FPD)
+        st.subheader("💰 Volumen de Créditos y Comportamiento FPD por Rango de Monto")
+        
+        # Definición de rangos
         bins = [0, 3000, 5000, 8000, 12000, 20000, float('inf')]
-        labels = ['$0 - $3k', '$3k - $5k', '$5k - $8k', '$8k - $12k', '$12k - $20k', '>$20k']
+        labels = ['$0-$3k', '$3k-$5k', '$5k-$8k', '$8k-$12k', '$12k-$20k', '>$20k']
         
         df_main['rango'] = pd.cut(df_main['monto_otorgado'], bins=bins, labels=labels, include_lowest=True)
-        df_s = df_main.groupby('rango', observed=True).agg({'fpd2_num':'sum','id_credito':'count'}).reset_index()
+        df_s = df_main.groupby('rango', observed=True).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
         df_s['rate'] = (df_s['fpd2_num']*100/df_s['id_credito'])
         
-        fig_s = px.bar(df_s, x='rango', y='rate', color='rate', color_continuous_scale='Reds', text=df_s['rate'].apply(lambda x: f'{x:.2f}%'))
-        fig_s.update_layout(plot_bgcolor='white', coloraxis_showscale=False, height=450, xaxis_title="Monto Otorgado", yaxis_title="% FPD2")
-        st.plotly_chart(fig_s, use_container_width=True)
+        # Crear la gráfica combinada
+        fig_combo = make_subplots(specs=[[{"secondary_y": True}]])
+
+        # Barras: Volumen por créditos
+        fig_combo.add_trace(
+            go.Bar(x=df_s['rango'], y=df_s['id_credito'], name="Volumen (Créditos)", marker_color='#AED6F1', text=df_s['id_credito'], textposition='auto'),
+            secondary_y=False,
+        )
+
+        # Línea: Comportamiento FPD
+        fig_combo.add_trace(
+            go.Scatter(x=df_s['rango'], y=df_s['rate'], name="% Tasa FPD2", mode='lines+markers+text', text=df_s['rate'].apply(lambda x: f'{x:.1f}%'), textposition='top center', line=dict(color='#C0392B', width=3)),
+            secondary_y=True,
+        )
+
+        # Configuración del diseño
+        fig_combo.update_layout(
+            plot_bgcolor='white',
+            height=500,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(t=50)
+        )
+
+        fig_combo.update_yaxes(title_text="Cantidad de Créditos", secondary_y=False)
+        fig_combo.update_yaxes(title_text="% Tasa FPD2", secondary_y=True, ticksuffix="%", range=[0, df_s['rate'].max() * 1.5])
+
+        st.plotly_chart(fig_combo, use_container_width=True)
+        st.caption("Las barras representan la cantidad de créditos colocados y la línea roja el porcentaje de riesgo FPD2 por rango de monto.")
