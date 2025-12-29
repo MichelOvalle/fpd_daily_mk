@@ -45,7 +45,7 @@ def get_main_data(regionales, sucursales, productos, tipos):
             TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE) as fecha_dt,
             CASE WHEN fpd2 = 'FPD' THEN 1 ELSE 0 END as fpd2_num,
             CASE WHEN NP = 'NP' THEN 1 ELSE 0 END as np_num,
-            id_credito, origen2, monto_otorgado,
+            id_credito, origen2, monto_otorgado, fpd2,
             COALESCE(tipo_cliente, 'N/A') as tipo_cliente, 
             COALESCE(sucursal, 'N/A') as sucursal, 
             COALESCE(unidad_regional, 'N/A') as unidad_regional, 
@@ -85,6 +85,26 @@ def get_executive_data(field):
     """
     return duckdb.query(query).to_df()
 
+@st.cache_data
+def get_export_data():
+    """Función específica para la pestaña de Exportar (Cosecha 202510 + FPD2=FPD)"""
+    query = """
+    SELECT 
+        id_credito, 
+        id_segmento, 
+        id_producto, 
+        producto_agrupado, 
+        origen2, 
+        strftime(TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE), '%Y%m') as cosecha, 
+        monto_otorgado, 
+        cuota, 
+        sucursal
+    FROM 'fpd_gemini.parquet'
+    WHERE fpd2 = 'FPD' 
+      AND strftime(TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE), '%Y%m') = '202510'
+    """
+    return duckdb.query(query).to_df()
+
 # --- 3. SIDEBAR ---
 st.sidebar.header("🎯 Filtros Dashboard")
 opt = get_filter_universes()
@@ -94,8 +114,8 @@ sel_suc = st.sidebar.multiselect("🏠 Sucursal", options=suc_disp)
 sel_prod = st.sidebar.multiselect("📦 Producto", options=sorted(opt['producto_agrupado'].unique()))
 sel_tip = st.sidebar.multiselect("👥 Tipo Cliente", options=sorted(opt['tipo_cliente'].unique()))
 
-st.title("📊 Monitor Estratégico de Riesgo")
-tabs = st.tabs(["📈 Monitor FPD", "💼 Resumen Ejecutivo", "💡 Insights Estratégicos", "📋 Datos"])
+st.title("📊 Monitor de Riesgo Crediticio")
+tabs = st.tabs(["📈 Monitor FPD", "💼 Resumen Ejecutivo", "💡 Insights Estratégicos", "📥 Exportar"])
 
 df_main = get_main_data(sel_reg, sel_suc, sel_prod, sel_tip)
 
@@ -170,41 +190,29 @@ with tabs[2]:
     if not df_main.empty:
         st.header("💡 Insights Estratégicos")
         lista_c = sorted(df_main['cosecha_id'].unique())
-        ult_c = lista_c[-1]
-        ant_c = lista_c[-2] if len(lista_c) > 1 else ult_c
-        mes_u = MESES_NOMBRE.get(ult_c[-2:], 'N/A').capitalize()
-        mes_a = MESES_NOMBRE.get(ant_c[-2:], 'N/A').capitalize()
+        ult_c = lista_c[-1]; ant_c = lista_c[-2] if len(lista_c) > 1 else ult_c
+        mes_u = MESES_NOMBRE.get(ult_c[-2:], 'N/A').capitalize(); mes_a = MESES_NOMBRE.get(ant_c[-2:], 'N/A').capitalize()
 
-        # 1. Heatmap Regional (Excluyendo Nóminas + ORDENADO POR ÚLTIMO MES)
-        st.subheader("📍 Tendencia de Riesgo Regional (Ranking Ordenado Últimos 6 Meses)")
+        # Heatmap
+        st.subheader("📍 Tendencia de Riesgo Regional (Ranking Ordenado 6 Meses)")
         u6 = lista_c[-6:]
         df_h_base = df_main[df_main['cosecha_id'].isin(u6)]
         df_h_base = df_h_base[~df_h_base['producto_agrupado'].str.upper().str.contains('NOMINA')]
         df_h = df_h_base.groupby(['unidad_regional','cosecha_id']).agg({'fpd2_num':'sum','id_credito':'count'}).reset_index()
         df_h['rate'] = (df_h['fpd2_num']*100/df_h['id_credito'])
-        
-        # Lógica de Ordenamiento
-        pivot_h = df_h.pivot(index='unidad_regional', columns='cosecha_id', values='rate')
-        # Ordenamos por la última columna disponible (el último mes) de menor a mayor riesgo
-        pivot_h = pivot_h.sort_values(by=pivot_h.columns[-1], ascending=True)
-        
+        pivot_h = df_h.pivot(index='unidad_regional', columns='cosecha_id', values='rate').sort_values(by=u6[-1], ascending=True)
         st.dataframe(pivot_h.style.background_gradient(cmap='RdYlGn_r').format("{:.2f}%"), use_container_width=True)
-        st.caption(f"Nota: La tabla está ordenada de menor a mayor riesgo basándose en el desempeño de {mes_u}.")
         
-        st.divider()
-
-        # 2. Pareto 80/20 Visual (Última Cosecha)
+        # Pareto 80/20
         st.subheader(f"🏢 Pareto de Sucursales: Concentración 80/20 (Casos FPD {mes_u})")
         df_p = df_main[df_main['cosecha_id'] == ult_c].groupby('sucursal').agg({'fpd2_num':'sum'}).reset_index().sort_values('fpd2_num', ascending=False)
         df_p['pct_acum'] = (df_p['fpd2_num'].cumsum() / df_p['fpd2_num'].sum() * 100) if not df_p.empty else 0
-        df_p['Grupo'] = df_p['pct_acum'].shift(1).fillna(0).apply(lambda x: f'Foco (Top 80% Riesgo {mes_u})' if x < 80 else 'Otros')
-        fig_p = px.bar(df_p.head(20), x='sucursal', y='fpd2_num', color='Grupo', color_discrete_map={f'Foco (Top 80% Riesgo {mes_u})': '#C0392B', 'Otros': '#AED6F1'})
+        df_p['Grupo'] = df_p['pct_acum'].shift(1).fillna(0).apply(lambda x: f'Foco (Top 80% Riesgo)' if x < 80 else 'Otros')
+        fig_p = px.bar(df_p.head(20), x='sucursal', y='fpd2_num', color='Grupo', color_discrete_map={f'Foco (Top 80% Riesgo)': '#C0392B', 'Otros': '#AED6F1'})
         fig_p.update_layout(plot_bgcolor='white', xaxis_tickangle=-45, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig_p, use_container_width=True)
 
-        st.divider()
-
-        # 3. Comparativa de Montos (Octubre vs Septiembre)
+        # Montos
         st.subheader(f"💰 Volumen y Calidad: Comparativa {mes_u} vs {mes_a}")
         bins = [0, 3000, 5000, 8000, 12000, 20000, float('inf')]
         labels = ['$0-$3k', '$3k-$5k', '$5k-$8k', '$8k-$12k', '$12k-$20k', '>$20k']
@@ -212,17 +220,44 @@ with tabs[2]:
         df_comp['rango'] = pd.cut(df_comp['monto_otorgado'], bins=bins, labels=labels, include_lowest=True)
         df_s = df_comp.groupby(['cosecha_id', 'rango'], observed=True).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
         df_s['rate'] = (df_s['fpd2_num']*100/df_s['id_credito'])
-        
-        df_ult = df_s[df_s['cosecha_id'] == ult_c]
-        df_ant = df_s[df_s['cosecha_id'] == ant_c]
-
+        df_ult = df_s[df_s['cosecha_id'] == ult_c]; df_ant = df_s[df_s['cosecha_id'] == ant_c]
         fig_combo = make_subplots(specs=[[{"secondary_y": True}]])
         fig_combo.add_trace(go.Bar(x=df_ult['rango'], y=df_ult['id_credito'], name=f"Créditos {mes_u}", marker_color='#2E86C1'), secondary_y=False)
         fig_combo.add_trace(go.Bar(x=df_ant['rango'], y=df_ant['id_credito'], name=f"Créditos {mes_a}", marker_color='#AED6F1'), secondary_y=False)
         fig_combo.add_trace(go.Scatter(x=df_ult['rango'], y=df_ult['rate'], name=f"% FPD {mes_u}", mode='lines+markers', line=dict(color='#C0392B', width=4)), secondary_y=True)
         fig_combo.add_trace(go.Scatter(x=df_ant['rango'], y=df_ant['rate'], name=f"% FPD {mes_a}", mode='lines+markers', line=dict(color='#E67E22', width=2, dash='dash')), secondary_y=True)
-        
         fig_combo.update_layout(plot_bgcolor='white', barmode='group', height=550, legend=LEGEND_BOTTOM)
-        fig_combo.update_yaxes(title_text="Cantidad de Créditos", secondary_y=False)
-        fig_combo.update_yaxes(title_text="% Tasa FPD2", secondary_y=True, ticksuffix="%", range=[0, df_s['rate'].max()*1.3 if not df_s['rate'].empty else 10])
         st.plotly_chart(fig_combo, use_container_width=True)
+
+# --- TAB 4: EXPORTAR (NUEVA!) ---
+with tabs[3]:
+    st.header("📥 Exportación de Cartera en Incumplimiento")
+    st.markdown("""
+    En esta sección puedes descargar el detalle de los créditos que cayeron en **FPD2** durante la cosecha **202510**. 
+    Este archivo es ideal para realizar gestiones de cobranza o análisis de causa raíz.
+    """)
+    
+    df_export = get_export_data()
+    
+    if not df_export.empty:
+        # Mostrar resumen previo a la descarga
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Casos FPD", f"{len(df_export)}")
+        c2.metric("Monto Total en Riesgo", f"${df_export['monto_otorgado'].sum():,.2f}")
+        c3.metric("Promedio Monto FPD", f"${df_export['monto_otorgado'].mean():,.2f}")
+        
+        st.divider()
+        st.subheader("Vista previa de los datos")
+        st.dataframe(df_export.head(10), use_container_width=True, hide_index=True)
+        
+        # Botón de descarga
+        csv = df_export.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="💾 Descargar Detalle FPD (CSV)",
+            data=csv,
+            file_name='detalle_fpd_cosecha_202510.csv',
+            mime='text/csv',
+            help="Haz clic para descargar el archivo con los campos solicitados."
+        )
+    else:
+        st.warning("No se encontraron registros de FPD para la cosecha 202510 con los criterios seleccionados.")
