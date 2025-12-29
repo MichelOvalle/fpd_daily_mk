@@ -94,12 +94,12 @@ sel_suc = st.sidebar.multiselect("🏠 Sucursal", options=suc_disp)
 sel_prod = st.sidebar.multiselect("📦 Producto", options=sorted(opt['producto_agrupado'].unique()))
 sel_tip = st.sidebar.multiselect("👥 Tipo Cliente", options=sorted(opt['tipo_cliente'].unique()))
 
-st.title("📊 Monitor Estratégico de Riesgo")
+st.title("📊 Monitor de Riesgo Crediticio")
 tabs = st.tabs(["📈 Monitor FPD", "💼 Resumen Ejecutivo", "💡 Insights Estratégicos", "📋 Datos"])
 
 df_main = get_main_data(sel_reg, sel_suc, sel_prod, sel_tip)
 
-# --- TAB 1: MONITOR FPD (Restaurado) ---
+# --- TAB 1: MONITOR FPD (COMPLETA) ---
 with tabs[0]:
     if not df_main.empty:
         df_t = df_main.groupby('cosecha_id').agg({'id_credito':'count', 'fpd2_num':'sum', 'np_num':'sum'}).reset_index()
@@ -116,8 +116,8 @@ with tabs[0]:
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Tendencia Global (FPD2)")
-            fig1 = go.Figure(go.Scatter(x=df_t['cosecha_id'], y=df_t['rate'], mode='lines+markers+text', text=df_t['rate'].apply(lambda x: f'{x:.1f}%'), line=dict(color='#1B4F72', width=4), fill='tozeroy', fillcolor='rgba(27,79,114,0.1)'))
-            fig1.update_layout(xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), plot_bgcolor='white', height=350)
+            fig1 = px.line(df_t, x='cosecha_id', y='rate', markers=True, text=df_t['rate'].apply(lambda x: f'{x:.1f}%'))
+            fig1.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350)
             st.plotly_chart(fig1, use_container_width=True)
         with c2:
             st.subheader("FPD2 por Origen")
@@ -143,7 +143,28 @@ with tabs[0]:
             fig4.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig4, use_container_width=True)
 
-# --- TAB 2: RESUMEN EJECUTIVO (Truco de redacción + Tablas) ---
+        st.subheader("Tipo Cliente (Sin Formers)")
+        df_tc = df_main[df_main['tipo_cliente'] != 'Formers'].groupby(['cosecha_id', 'tipo_cliente']).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
+        df_tc['rate'] = (df_tc['fpd2_num'] * 100 / df_tc['id_credito'])
+        fig5 = px.line(df_tc, x='cosecha_id', y='rate', color='tipo_cliente', markers=True)
+        fig5.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=400, legend=LEGEND_BOTTOM)
+        st.plotly_chart(fig5, use_container_width=True)
+
+        st.divider()
+        cosechas = sorted(df_main['cosecha_id'].unique())
+        ant_c = cosechas[-2] if len(cosechas) > 1 else cosechas[-1]
+        df_r_c = df_main[df_main['cosecha_id'] == cosechas[-1]].groupby('sucursal').agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
+        df_r_c['rate'] = (df_r_c['fpd2_num'] * 100 / df_r_c['id_credito'])
+        df_r_p = df_main[df_main['cosecha_id'] == ant_c].groupby('sucursal').agg({'fpd2_num':'sum', 'id_credito':'count'}).reset_index()
+        df_r_p['rate_ant'] = (df_r_p['fpd2_num'] * 100 / df_r_p['id_credito'])
+        df_rf = pd.merge(df_r_c, df_r_p[['sucursal', 'rate_ant']], on='sucursal', how='left')
+        st.subheader(f"🏆 Rankings Sucursales - Cosecha {cosechas[-1]}")
+        cr1, cr2 = st.columns(2)
+        conf = {"sucursal":"Sucursal", "id_credito":"Créditos", "rate":st.column_config.NumberColumn("% FPD", format="%.2f%%"), "rate_ant":st.column_config.NumberColumn("% Ant", format="%.2f%%")}
+        cr1.dataframe(df_rf.sort_values('rate', ascending=False).head(10), column_config=conf, hide_index=True, use_container_width=True)
+        cr2.dataframe(df_rf.sort_values('rate', ascending=True).head(10), column_config=conf, hide_index=True, use_container_width=True)
+
+# --- TAB 2: RESUMEN EJECUTIVO ---
 with tabs[1]:
     st.header("💼 Resumen Ejecutivo Gerencial")
     def render_exec_block(field, title, dim_label):
@@ -165,62 +186,46 @@ with tabs[1]:
     render_exec_block('producto_agrupado', "Producto", "Producto")
     render_exec_block('sucursal', "Sucursal", "Sucursal")
 
-# --- TAB 3: INSIGHTS ESTRATÉGICOS (Combo Chart de Monto) ---
+# --- TAB 3: INSIGHTS ESTRATÉGICOS (AJUSTADO) ---
 with tabs[2]:
     if not df_main.empty:
         st.header("💡 Insights Estratégicos")
-        # 1. Heatmap
+        
+        # 1. Heatmap (Verde = Bajo Riesgo, Rojo = Alto Riesgo)
         st.subheader("📍 Tendencia de Riesgo Regional (6 Meses)")
         u6 = sorted(df_main['cosecha_id'].unique())[-6:]
         df_h = df_main[df_main['cosecha_id'].isin(u6)].groupby(['unidad_regional','cosecha_id']).agg({'fpd2_num':'sum','id_credito':'count'}).reset_index()
         df_h['rate'] = (df_h['fpd2_num']*100/df_h['id_credito'])
-        st.dataframe(df_h.pivot(index='unidad_regional', columns='cosecha_id', values='rate').style.background_gradient(cmap='YlOrRd').format("{:.2f}%"), use_container_width=True)
+        # Aplicamos la escala RdYlGn_r (Red-Yellow-Green Reversed) para que 0 sea Verde
+        st.dataframe(df_h.pivot(index='unidad_regional', columns='cosecha_id', values='rate').style.background_gradient(cmap='RdYlGn_r').format("{:.2f}%"), use_container_width=True)
         
-        # 2. Pareto
-        st.subheader("🏢 Pareto de Sucursales")
+        st.divider()
+
+        # 2. Pareto Sucursales (Solo Barras)
+        st.subheader("🏢 Pareto de Sucursales (Volumen de Casos FPD)")
         df_p = df_main.groupby('sucursal').agg({'fpd2_num':'sum'}).reset_index().sort_values('fpd2_num', ascending=False)
-        df_p['acum'] = (df_p['fpd2_num'].cumsum() / df_p['fpd2_num'].sum()) * 100
-        fig_p = go.Figure([go.Bar(x=df_p['sucursal'].head(20), y=df_p['fpd2_num'].head(20), name="Casos"),
-                           go.Scatter(x=df_p['sucursal'].head(20), y=df_p['acum'].head(20), name="% Acum", yaxis="y2", line=dict(color='red'))])
-        fig_p.update_layout(yaxis2=dict(overlaying="y", side="right", range=[0,110]), plot_bgcolor='white', legend=LEGEND_BOTTOM, height=500)
+        fig_p = px.bar(df_p.head(20), x='sucursal', y='fpd2_num', 
+                       labels={'sucursal': 'Sucursal', 'fpd2_num': 'Casos FPD'},
+                       title="Top 20 Sucursales con más casos FPD")
+        fig_p.update_layout(plot_bgcolor='white', xaxis_tickangle=-45)
         st.plotly_chart(fig_p, use_container_width=True)
 
-        # 3. SENSIBILIDAD MONTO (Gráfica de Doble Eje: Volumen + FPD)
-        st.subheader("💰 Volumen de Créditos y Comportamiento FPD por Rango de Monto")
-        
-        # Definición de rangos
+        st.divider()
+
+        # 3. Combo Chart: Volumen y Tasa FPD por Rango
+        st.subheader("💰 Volumen y Calidad por Rango de Monto")
         bins = [0, 3000, 5000, 8000, 12000, 20000, float('inf')]
         labels = ['$0-$3k', '$3k-$5k', '$5k-$8k', '$8k-$12k', '$12k-$20k', '>$20k']
-        
         df_main['rango'] = pd.cut(df_main['monto_otorgado'], bins=bins, labels=labels, include_lowest=True)
         df_s = df_main.groupby('rango', observed=True).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
         df_s['rate'] = (df_s['fpd2_num']*100/df_s['id_credito'])
         
-        # Crear la gráfica combinada
         fig_combo = make_subplots(specs=[[{"secondary_y": True}]])
-
-        # Barras: Volumen por créditos
-        fig_combo.add_trace(
-            go.Bar(x=df_s['rango'], y=df_s['id_credito'], name="Volumen (Créditos)", marker_color='#AED6F1', text=df_s['id_credito'], textposition='auto'),
-            secondary_y=False,
-        )
-
-        # Línea: Comportamiento FPD
-        fig_combo.add_trace(
-            go.Scatter(x=df_s['rango'], y=df_s['rate'], name="% Tasa FPD2", mode='lines+markers+text', text=df_s['rate'].apply(lambda x: f'{x:.1f}%'), textposition='top center', line=dict(color='#C0392B', width=3)),
-            secondary_y=True,
-        )
-
-        # Configuración del diseño
-        fig_combo.update_layout(
-            plot_bgcolor='white',
-            height=500,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(t=50)
-        )
-
+        fig_combo.add_trace(go.Bar(x=df_s['rango'], y=df_s['id_credito'], name="Créditos Colocados", marker_color='#AED6F1'), secondary_y=False)
+        fig_combo.add_trace(go.Scatter(x=df_s['rango'], y=df_s['rate'], name="% Tasa FPD2", mode='lines+markers+text', text=df_s['rate'].apply(lambda x: f'{x:.1f}%'), line=dict(color='#C0392B', width=3)), secondary_y=True)
+        fig_combo.update_layout(plot_bgcolor='white', legend=LEGEND_BOTTOM, height=500)
         fig_combo.update_yaxes(title_text="Cantidad de Créditos", secondary_y=False)
-        fig_combo.update_yaxes(title_text="% Tasa FPD2", secondary_y=True, ticksuffix="%", range=[0, df_s['rate'].max() * 1.5])
-
+        fig_combo.update_yaxes(title_text="% Tasa FPD2", secondary_y=True, ticksuffix="%", range=[0, df_s['rate'].max()*1.5])
         st.plotly_chart(fig_combo, use_container_width=True)
-        st.caption("Las barras representan la cantidad de créditos colocados y la línea roja el porcentaje de riesgo FPD2 por rango de monto.")
+
+with tabs[3]: st.info("Pestaña de Datos vacía.")
