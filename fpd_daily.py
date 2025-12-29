@@ -11,7 +11,7 @@ except ImportError:
     st.error("Falta la librería 'duckdb'. Instálala ejecutando: pip install duckdb")
     st.stop()
 
-# --- 1. CONFIGURACIÓN ---
+# --- 1. CONFIGURACIÓN Y ESTILOS ---
 st.set_page_config(page_title="FPD Daily - Dashboard Pro", layout="wide", page_icon="📊")
 
 MESES_NOMBRE = {
@@ -45,7 +45,7 @@ def get_main_data(regionales, sucursales, productos, tipos):
             TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE) as fecha_dt,
             CASE WHEN fpd2 = 'FPD' THEN 1 ELSE 0 END as fpd2_num,
             CASE WHEN NP = 'NP' THEN 1 ELSE 0 END as np_num,
-            id_credito, origen2, monto_otorgado, fpd2,
+            id_credito, id_segmento, id_producto, origen2, monto_otorgado, cuota, fpd2,
             COALESCE(tipo_cliente, 'N/A') as tipo_cliente, 
             COALESCE(sucursal, 'N/A') as sucursal, 
             COALESCE(unidad_regional, 'N/A') as unidad_regional, 
@@ -81,27 +81,7 @@ def get_executive_data(field):
            dimension, COUNT(id_credito) as total, SUM(fpd2_num) as fpd2_si,
            (SUM(fpd2_num) * 100.0 / COUNT(id_credito)) as fpd2_rate
     FROM base WHERE fecha_dt <= (CURRENT_DATE - INTERVAL 2 MONTH) AND fecha_dt IS NOT NULL
-    GROUP BY ALL
-    """
-    return duckdb.query(query).to_df()
-
-@st.cache_data
-def get_export_data():
-    """Función específica para la pestaña de Exportar (Cosecha 202510 + FPD2=FPD)"""
-    query = """
-    SELECT 
-        id_credito, 
-        id_segmento, 
-        id_producto, 
-        producto_agrupado, 
-        origen2, 
-        strftime(TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE), '%Y%m') as cosecha, 
-        monto_otorgado, 
-        cuota, 
-        sucursal
-    FROM 'fpd_gemini.parquet'
-    WHERE fpd2 = 'FPD' 
-      AND strftime(TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE), '%Y%m') = '202510'
+    GROUP BY ALL ORDER BY cosecha_id ASC
     """
     return duckdb.query(query).to_df()
 
@@ -119,7 +99,7 @@ tabs = st.tabs(["📈 Monitor FPD", "💼 Resumen Ejecutivo", "💡 Insights Est
 
 df_main = get_main_data(sel_reg, sel_suc, sel_prod, sel_tip)
 
-# --- TAB 1: MONITOR FPD ---
+# --- TAB 1: MONITOR FPD (RESTAURADA) ---
 with tabs[0]:
     if not df_main.empty:
         df_t = df_main.groupby('cosecha_id').agg({'id_credito':'count', 'fpd2_num':'sum', 'np_num':'sum'}).reset_index()
@@ -132,7 +112,7 @@ with tabs[0]:
         k3.metric("Tasa FPD2", f"{ult['rate']:.2f}%")
         k4.metric("Tasa NP", f"{ult['np_rate']:.2f}%")
         st.divider()
-        
+
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Tendencia Global (FPD2)")
@@ -163,7 +143,30 @@ with tabs[0]:
             fig4.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig4, use_container_width=True)
 
-# --- TAB 2: RESUMEN EJECUTIVO ---
+        st.subheader("Tipo Cliente (Sin Formers)")
+        df_tc = df_main[df_main['tipo_cliente'] != 'Formers'].groupby(['cosecha_id', 'tipo_cliente']).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
+        df_tc['rate'] = (df_tc['fpd2_num'] * 100 / df_tc['id_credito'])
+        fig5 = px.line(df_tc, x='cosecha_id', y='rate', color='tipo_cliente', markers=True)
+        fig5.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=400, legend=LEGEND_BOTTOM)
+        st.plotly_chart(fig5, use_container_width=True)
+
+        st.divider()
+        cosechas = sorted(df_main['cosecha_id'].unique())
+        ant_c = cosechas[-2] if len(cosechas) > 1 else cosechas[-1]
+        df_r_c = df_main[df_main['cosecha_id'] == cosechas[-1]].groupby('sucursal').agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
+        df_r_c['rate'] = (df_r_c['fpd2_num'] * 100 / df_r_c['id_credito'])
+        df_r_p = df_main[df_main['cosecha_id'] == ant_c].groupby('sucursal').agg({'fpd2_num':'sum', 'id_credito':'count'}).reset_index()
+        df_r_p['rate_ant'] = (df_r_p['fpd2_num'] * 100 / df_r_p['id_credito'])
+        df_rf = pd.merge(df_r_c, df_r_p[['sucursal', 'rate_ant']], on='sucursal', how='left')
+        st.subheader(f"🏆 Rankings Sucursales - Cosecha {cosechas[-1]}")
+        cr1, cr2 = st.columns(2)
+        conf = {"sucursal":"Sucursal", "id_credito":"Créditos", "rate":st.column_config.NumberColumn("% FPD", format="%.2f%%"), "rate_ant":st.column_config.NumberColumn("% Ant", format="%.2f%%")}
+        cr1.markdown("**🔴 Top 10 Riesgo**")
+        cr1.dataframe(df_rf.sort_values('rate', ascending=False).head(10), column_config=conf, hide_index=True, use_container_width=True)
+        cr2.markdown("**🟢 Bottom 10 Riesgo**")
+        cr2.dataframe(df_rf.sort_values('rate', ascending=True).head(10), column_config=conf, hide_index=True, use_container_width=True)
+
+# --- TAB 2: RESUMEN EJECUTIVO (INDEPENDIENTE + HEATMAP DUAL) ---
 with tabs[1]:
     st.header("💼 Resumen Ejecutivo Gerencial")
     def render_exec_block(field, title, dim_label):
@@ -185,7 +188,7 @@ with tabs[1]:
     render_exec_block('producto_agrupado', "Producto", "Producto")
     render_exec_block('sucursal', "Sucursal", "Sucursal")
 
-# --- TAB 3: INSIGHTS ESTRATÉGICOS ---
+# --- TAB 3: INSIGHTS ESTRATÉGICOS (HEATMAP SEMAFÓRICO + PARETO 80/20 + COMBO) ---
 with tabs[2]:
     if not df_main.empty:
         st.header("💡 Insights Estratégicos")
@@ -193,8 +196,8 @@ with tabs[2]:
         ult_c = lista_c[-1]; ant_c = lista_c[-2] if len(lista_c) > 1 else ult_c
         mes_u = MESES_NOMBRE.get(ult_c[-2:], 'N/A').capitalize(); mes_a = MESES_NOMBRE.get(ant_c[-2:], 'N/A').capitalize()
 
-        # Heatmap
-        st.subheader("📍 Tendencia de Riesgo Regional (Ranking Ordenado 6 Meses)")
+        # 1. Heatmap Regional
+        st.subheader("📍 Tendencia Regional (Ranking Salud - 6 Meses)")
         u6 = lista_c[-6:]
         df_h_base = df_main[df_main['cosecha_id'].isin(u6)]
         df_h_base = df_h_base[~df_h_base['producto_agrupado'].str.upper().str.contains('NOMINA')]
@@ -203,16 +206,16 @@ with tabs[2]:
         pivot_h = df_h.pivot(index='unidad_regional', columns='cosecha_id', values='rate').sort_values(by=u6[-1], ascending=True)
         st.dataframe(pivot_h.style.background_gradient(cmap='RdYlGn_r').format("{:.2f}%"), use_container_width=True)
         
-        # Pareto 80/20
+        # 2. Pareto de Sucursales (80/20 Visual)
         st.subheader(f"🏢 Pareto de Sucursales: Concentración 80/20 (Casos FPD {mes_u})")
         df_p = df_main[df_main['cosecha_id'] == ult_c].groupby('sucursal').agg({'fpd2_num':'sum'}).reset_index().sort_values('fpd2_num', ascending=False)
         df_p['pct_acum'] = (df_p['fpd2_num'].cumsum() / df_p['fpd2_num'].sum() * 100) if not df_p.empty else 0
         df_p['Grupo'] = df_p['pct_acum'].shift(1).fillna(0).apply(lambda x: f'Foco (Top 80% Riesgo)' if x < 80 else 'Otros')
-        fig_p = px.bar(df_p.head(20), x='sucursal', y='fpd2_num', color='Grupo', color_discrete_map={f'Foco (Top 80% Riesgo)': '#C0392B', 'Otros': '#AED6F1'})
+        fig_p = px.bar(df_p.head(20), x='sucursal', y='fpd2_num', color='Grupo', color_discrete_map={'Foco (Top 80% Riesgo)': '#C0392B', 'Otros': '#AED6F1'})
         fig_p.update_layout(plot_bgcolor='white', xaxis_tickangle=-45, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig_p, use_container_width=True)
 
-        # Montos
+        # 3. Combo Chart Comparativo
         st.subheader(f"💰 Volumen y Calidad: Comparativa {mes_u} vs {mes_a}")
         bins = [0, 3000, 5000, 8000, 12000, 20000, float('inf')]
         labels = ['$0-$3k', '$3k-$5k', '$5k-$8k', '$8k-$12k', '$12k-$20k', '>$20k']
@@ -220,44 +223,22 @@ with tabs[2]:
         df_comp['rango'] = pd.cut(df_comp['monto_otorgado'], bins=bins, labels=labels, include_lowest=True)
         df_s = df_comp.groupby(['cosecha_id', 'rango'], observed=True).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
         df_s['rate'] = (df_s['fpd2_num']*100/df_s['id_credito'])
-        df_ult = df_s[df_s['cosecha_id'] == ult_c]; df_ant = df_s[df_s['cosecha_id'] == ant_c]
+        df_u_m = df_s[df_s['cosecha_id'] == ult_c]; df_a_m = df_s[df_s['cosecha_id'] == ant_c]
         fig_combo = make_subplots(specs=[[{"secondary_y": True}]])
-        fig_combo.add_trace(go.Bar(x=df_ult['rango'], y=df_ult['id_credito'], name=f"Créditos {mes_u}", marker_color='#2E86C1'), secondary_y=False)
-        fig_combo.add_trace(go.Bar(x=df_ant['rango'], y=df_ant['id_credito'], name=f"Créditos {mes_a}", marker_color='#AED6F1'), secondary_y=False)
-        fig_combo.add_trace(go.Scatter(x=df_ult['rango'], y=df_ult['rate'], name=f"% FPD {mes_u}", mode='lines+markers', line=dict(color='#C0392B', width=4)), secondary_y=True)
-        fig_combo.add_trace(go.Scatter(x=df_ant['rango'], y=df_ant['rate'], name=f"% FPD {mes_a}", mode='lines+markers', line=dict(color='#E67E22', width=2, dash='dash')), secondary_y=True)
+        fig_combo.add_trace(go.Bar(x=df_u_m['rango'], y=df_u_m['id_credito'], name=f"Créditos {mes_u}", marker_color='#2E86C1'), secondary_y=False)
+        fig_combo.add_trace(go.Bar(x=df_a_m['rango'], y=df_a_m['id_credito'], name=f"Créditos {mes_a}", marker_color='#AED6F1'), secondary_y=False)
+        fig_combo.add_trace(go.Scatter(x=df_u_m['rango'], y=df_u_m['rate'], name=f"% FPD {mes_u}", mode='lines+markers', line=dict(color='#C0392B', width=4)), secondary_y=True)
+        fig_combo.add_trace(go.Scatter(x=df_a_m['rango'], y=df_a_m['rate'], name=f"% FPD {mes_a}", mode='lines+markers', line=dict(color='#E67E22', width=2, dash='dash')), secondary_y=True)
         fig_combo.update_layout(plot_bgcolor='white', barmode='group', height=550, legend=LEGEND_BOTTOM)
         st.plotly_chart(fig_combo, use_container_width=True)
 
-# --- TAB 4: EXPORTAR (NUEVA!) ---
+# --- TAB 4: EXPORTAR (DINÁMICA AL SIDEBAR) ---
 with tabs[3]:
-    st.header("📥 Exportación de Cartera en Incumplimiento")
-    st.markdown("""
-    En esta sección puedes descargar el detalle de los créditos que cayeron en **FPD2** durante la cosecha **202510**. 
-    Este archivo es ideal para realizar gestiones de cobranza o análisis de causa raíz.
-    """)
-    
-    df_export = get_export_data()
-    
-    if not df_export.empty:
-        # Mostrar resumen previo a la descarga
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total Casos FPD", f"{len(df_export)}")
-        c2.metric("Monto Total en Riesgo", f"${df_export['monto_otorgado'].sum():,.2f}")
-        c3.metric("Promedio Monto FPD", f"${df_export['monto_otorgado'].mean():,.2f}")
-        
-        st.divider()
-        st.subheader("Vista previa de los datos")
-        st.dataframe(df_export.head(10), use_container_width=True, hide_index=True)
-        
-        # Botón de descarga
-        csv = df_export.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="💾 Descargar Detalle FPD (CSV)",
-            data=csv,
-            file_name='detalle_fpd_cosecha_202510.csv',
-            mime='text/csv',
-            help="Haz clic para descargar el archivo con los campos solicitados."
-        )
-    else:
-        st.warning("No se encontraron registros de FPD para la cosecha 202510 con los criterios seleccionados.")
+    st.header("📥 Exportar Detalle FPD (Cosecha 202510)")
+    if not df_main.empty:
+        df_exp = df_main[(df_main['cosecha_id'] == '202510') & (df_main['fpd2'] == 'FPD')].copy()
+        cols = ['id_credito', 'id_segmento', 'id_producto', 'producto_agrupado', 'origen2', 'cosecha_id', 'monto_otorgado', 'cuota', 'sucursal']
+        df_exp = df_exp[cols].rename(columns={'cosecha_id':'cosecha'})
+        st.subheader(f"Registros encontrados: {len(df_exp)}")
+        st.dataframe(df_exp.head(15), use_container_width=True, hide_index=True)
+        st.download_button(label="💾 Descargar CSV", data=df_exp.to_csv(index=False).encode('utf-8'), file_name='detalle_fpd_202510.csv', mime='text/csv')
