@@ -187,7 +187,6 @@ with tabs[1]:
                 df_u = df_e[df_e['cosecha_id'] == u_e].sort_values('fpd_rate')
                 df_a = df_e[df_e['cosecha_id'] == a_e].sort_values('fpd_rate')
                 
-                # --- REDACCIÓN DINÁMICA RESTAURADA ---
                 c1, c2 = st.columns(2)
                 c1.success(f"**{dim_label} Destacada:** La mejor es **{df_u.iloc[0]['dimension']}** con un **{df_u.iloc[0]['fpd_rate']:.2f}%** en **{m_u}**, mientras que en **{m_a}** fue **{df_a.iloc[0]['dimension']}** con un **{df_a.iloc[0]['fpd_rate']:.2f}%**.")
                 c2.error(f"**{dim_label} Riesgosa:** La de mayor riesgo es **{df_u.iloc[-1]['dimension']}** con un **{df_u.iloc[-1]['fpd_rate']:.2f}%** en **{m_u}**, mientras que en **{m_a}** fue **{df_a.iloc[-1]['dimension']}** con un **{df_a.iloc[-1]['fpd_rate']:.2f}%**.")
@@ -232,14 +231,33 @@ with tabs[2]:
         fig_combo.update_layout(plot_bgcolor='white', barmode='group', height=550, legend=LEGEND_BOTTOM)
         st.plotly_chart(fig_combo, use_container_width=True)
 
-# --- TAB 4: EXPORTAR ---
+# --- TAB 4: EXPORTAR (SOLO ÚLTIMAS 2 COSECHAS) ---
 with tabs[3]:
     if not df_main.empty:
-        st.header(f"📥 Exportar Detalle FPD")
-        cosecha_export = st.selectbox("Selecciona la cosecha a exportar:", sorted(df_main['cosecha_id'].unique(), reverse=True))
+        st.header("📥 Exportar Detalle FPD")
+        
+        # Obtenemos solo las últimas dos del archivo completo
+        lista_export = sorted(df_main['cosecha_id'].unique(), reverse=True)[:2] 
+        
+        # El índice 1 en lista_export (que es descendente) es la penúltima
+        # Ponemos un pequeño chequeo por si solo hay una cosecha en el archivo
+        idx_defecto = 1 if len(lista_export) > 1 else 0
+        
+        cosecha_export = st.selectbox(
+            "Selecciona la cosecha a exportar:", 
+            options=lista_export, 
+            index=idx_defecto # Selecciona por default la penúltima
+        )
+        
         df_exp = df_main[(df_main['cosecha_id'] == cosecha_export) & (df_main['fpd2'] == 'FPD')].copy()
         cols = ['id_credito', 'id_segmento', 'id_producto', 'producto_agrupado', 'origen2', 'cosecha_id', 'monto_otorgado', 'cuota', 'sucursal']
         df_exp = df_exp[cols].rename(columns={'cosecha_id':'cosecha'})
+        
         st.subheader(f"Casos FPD encontrados en {cosecha_export}: {len(df_exp)}")
         st.dataframe(df_exp, use_container_width=True, hide_index=True)
-        st.download_button(label=f"💾 Descargar CSV {cosecha_export}", data=df_exp.to_csv(index=False).encode('utf-8'), file_name=f'detalle_fpd_{cosecha_export}.csv', mime='text/csv')
+        st.download_button(
+            label=f"💾 Descargar CSV {cosecha_export}", 
+            data=df_exp.to_csv(index=False).encode('utf-8'), 
+            file_name=f'detalle_fpd_{cosecha_export}.csv', 
+            mime='text/csv'
+        )
