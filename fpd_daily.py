@@ -74,7 +74,8 @@ def get_executive_data(field):
           AND sucursal != '999.EMPRESA NOMINA COLABORADORES'
     )
     SELECT strftime(fecha_dt, '%Y%m') as cosecha_id, 
-           dimension, COUNT(id_credito) as total_vol, SUM(fpd_si) as fpd_si,
+           dimension, COUNT(id_credito) as total_vol, 
+           SUM(fpd_num) as fpd_si, 
            (SUM(fpd_num) * 100.0 / COUNT(id_credito)) as fpd_rate
     FROM base WHERE fecha_dt IS NOT NULL
     GROUP BY ALL ORDER BY cosecha_id ASC
@@ -107,7 +108,6 @@ tabs = st.tabs(["📈 Monitor FPD", "💼 Resumen Ejecutivo", "💡 Insights Est
 # --- TAB 1: MONITOR FPD (IGNORANDO MÁXIMO) ---
 with tabs[0]:
     if not df_main.empty:
-        # --- FILTRO ESPECÍFICO PARA TAB 1 ---
         max_c_global = df_main['cosecha_id'].max()
         df_tab1 = df_main[df_main['cosecha_id'] < max_c_global].copy()
         
@@ -116,7 +116,6 @@ with tabs[0]:
             df_t['%FPD'] = (df_t['fpd_num'] * 100 / df_t['id_credito'])
             df_t['np_rate'] = (df_t['np_num'] * 100 / df_t['id_credito'])
             
-            # Identificadores para Tab 1
             cosechas_t1 = sorted(df_t['cosecha_id'].unique())
             ult_t1 = df_t.iloc[-1]
             ant_t1 = df_t.iloc[-2] if len(df_t) > 1 else ult_t1
@@ -164,7 +163,7 @@ with tabs[0]:
             st.plotly_chart(fig5, use_container_width=True)
 
             st.divider()
-            # Rankings Sucursales (Cosechas T1)
+            # Rankings Sucursales
             ult_c_t1 = cosechas_t1[-1]
             ant_c_t1 = cosechas_t1[-2] if len(cosechas_t1) > 1 else ult_c_t1
             df_r_c = df_tab1[df_tab1['cosecha_id'] == ult_c_t1].groupby('sucursal').agg({'id_credito':'count', 'fpd_num':'sum'}).reset_index()
@@ -178,10 +177,8 @@ with tabs[0]:
             conf_rank = {"sucursal": "Sucursal", "id_credito": f"Créditos {ult_c_t1}", "id_credito_ant": f"Créditos {ant_c_t1}", "fpd_num": st.column_config.NumberColumn(f"Casos FPD {ult_c_t1}", format="%d"), "rate": st.column_config.NumberColumn(f"%FPD {ult_c_t1}", format="%.2f%%"), "rate_ant": st.column_config.NumberColumn(f"%FPD {ant_c_t1}", format="%.2f%%")}
             cr1.markdown("**🔴 Top 10 Riesgo**"); cr1.dataframe(df_rf.sort_values('rate', ascending=False).head(10), column_config=conf_rank, hide_index=True, use_container_width=True)
             cr2.markdown("**🟢 Bottom 10 Riesgo**"); cr2.dataframe(df_rf.sort_values('rate', ascending=True).head(10), column_config=conf_rank, hide_index=True, use_container_width=True)
-        else:
-            st.warning("No hay suficientes cosechas para mostrar el Monitor (se está ignorando el máximo).")
 
-# --- TAB 2: RESUMEN EJECUTIVO (USA TODO EL DATAFRAME) ---
+# --- TAB 2: RESUMEN EJECUTIVO ---
 with tabs[1]:
     if not df_main.empty:
         st.header("💼 Resumen Ejecutivo Gerencial")
