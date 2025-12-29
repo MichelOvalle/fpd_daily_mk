@@ -78,12 +78,11 @@ def get_executive_data(field):
           AND sucursal != '999.EMPRESA NOMINA COLABORADORES'
     )
     SELECT strftime(fecha_dt, '%Y%m') as cosecha_id, RIGHT(strftime(fecha_dt, '%Y%m'), 2) as mes_id,
-           dimension, COUNT(id_credito) as total, SUM(fp_num) as fpd_si,
+           dimension, COUNT(id_credito) as total, SUM(fpd_num) as fpd_si,
            (SUM(fpd_num) * 100.0 / COUNT(id_credito)) as fpd_rate
     FROM base WHERE fecha_dt <= (CURRENT_DATE - INTERVAL 2 MONTH) AND fecha_dt IS NOT NULL
     GROUP BY ALL ORDER BY cosecha_id ASC
     """
-    # Nota: se usa fpd_num internamente pero se etiqueta como Casos FPD
     return duckdb.query(query).to_df()
 
 # --- 3. SIDEBAR ---
@@ -106,26 +105,36 @@ with tabs[0]:
         df_t = df_main.groupby('cosecha_id').agg({'id_credito':'count', 'fpd_num':'sum', 'np_num':'sum'}).reset_index()
         df_t['%FPD'] = (df_t['fpd_num'] * 100 / df_t['id_credito'])
         df_t['np_rate'] = (df_t['np_num'] * 100 / df_t['id_credito'])
-        ult = df_t.iloc[-1]
         
+        # Comparativa de Cosechas para KPIs
+        ult = df_t.iloc[-1]
+        ant = df_t.iloc[-2] if len(df_t) > 1 else ult
+        
+        # KPIs con Deltas (Comparativa vs Cosecha Anterior)
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Cosecha Actual", ult['cosecha_id'])
-        k2.metric("Créditos", f"{int(ult['id_credito']):,}")
-        k3.metric("Tasa FPD", f"{ult['%FPD']:.2f}%")
-        k4.metric("Tasa NP", f"{ult['np_rate']:.2f}%")
+        k1.metric("Cosecha Actual", ult['cosecha_id'], f"Anterior: {ant['cosecha_id']}", delta_color="off")
+        k2.metric("Créditos", f"{int(ult['id_credito']):,}", f"{int(ult['id_credito'] - ant['id_credito']):+,} vs mes ant")
+        k3.metric("Tasa FPD", f"{ult['%FPD']:.2f}%", f"{ult['%FPD'] - ant['%FPD']:.2f}% vs mes ant", delta_color="inverse")
+        k4.metric("Tasa NP", f"{ult['np_rate']:.2f}%", f"{ult['np_rate'] - ant['np_rate']:.2f}% vs mes ant", delta_color="inverse")
         st.divider()
 
+        # Gráficas con Serie de Datos (Etiquetas)
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Tendencia Global (FPD)")
-            fig1 = px.line(df_t, x='cosecha_id', y='%FPD', markers=True, text=df_t['%FPD'].apply(lambda x: f'{x:.1f}%'))
+            fig1 = px.line(df_t, x='cosecha_id', y='%FPD', markers=True, 
+                           text=df_t['%FPD'].apply(lambda x: f'{x:.1f}%'))
+            fig1.update_traces(textposition="top center")
             fig1.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350)
             st.plotly_chart(fig1, use_container_width=True)
+            
         with c2:
             st.subheader("FPD por Origen")
             df_o = df_main.groupby(['cosecha_id', 'origen2']).agg({'id_credito':'count', 'fpd_num':'sum'}).reset_index()
             df_o['%FPD'] = (df_o['fpd_num'] * 100 / df_o['id_credito'])
-            fig2 = px.line(df_o, x='cosecha_id', y='%FPD', color='origen2', markers=True)
+            fig2 = px.line(df_o, x='cosecha_id', y='%FPD', color='origen2', markers=True,
+                           text=df_o['%FPD'].apply(lambda x: f'{x:.1f}%'))
+            fig2.update_traces(textposition="top center")
             fig2.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig2, use_container_width=True)
 
@@ -137,11 +146,13 @@ with tabs[0]:
             fig3 = px.line(df_y[df_y['anio'].isin([2023, 2024, 2025])], x='mes', y='%FPD', color=df_y['anio'].astype(str), markers=True)
             fig3.update_layout(xaxis=dict(ticktext=list(MESES_NOMBRE.values()), tickvals=list(MESES_NOMBRE.keys())), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig3, use_container_width=True)
+            
         with c4:
-            st.subheader("Histórico Indicadores")
+            st.subheader("Histórico Indicadores (Últimas 24 Cosechas)")
             df_t_24 = df_t.tail(24)
             fig4 = go.Figure()
-            fig4.add_trace(go.Scatter(x=df_t_24['cosecha_id'], y=df_t_24['%FPD'], name='% FPD'))
+            fig4.add_trace(go.Scatter(x=df_t_24['cosecha_id'], y=df_t_24['%FPD'], name='% FPD', mode='lines+markers+text', 
+                                      text=df_t_24['%FPD'].apply(lambda x: f'{x:.1f}%'), textposition="top center"))
             fig4.add_trace(go.Scatter(x=df_t_24['cosecha_id'], y=df_t_24['np_rate'], name='% NP', line=dict(dash='dash')))
             fig4.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
             st.plotly_chart(fig4, use_container_width=True)
@@ -150,7 +161,9 @@ with tabs[0]:
         u24 = sorted(df_main['cosecha_id'].unique())[-24:]
         df_tc = df_main[(df_main['tipo_cliente'] != 'Formers') & (df_main['cosecha_id'].isin(u24))].groupby(['cosecha_id', 'tipo_cliente']).agg({'id_credito':'count', 'fpd_num':'sum'}).reset_index()
         df_tc['%FPD'] = (df_tc['fpd_num'] * 100 / df_tc['id_credito'])
-        fig5 = px.line(df_tc, x='cosecha_id', y='%FPD', color='tipo_cliente', markers=True)
+        fig5 = px.line(df_tc, x='cosecha_id', y='%FPD', color='tipo_cliente', markers=True,
+                       text=df_tc['%FPD'].apply(lambda x: f'{x:.1f}%'))
+        fig5.update_traces(textposition="top center")
         fig5.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=400, legend=LEGEND_BOTTOM)
         st.plotly_chart(fig5, use_container_width=True)
 
@@ -159,19 +172,13 @@ with tabs[0]:
         cosechas = sorted(df_main['cosecha_id'].unique())
         ult_c = cosechas[-1]
         ant_c = cosechas[-2] if len(cosechas) > 1 else ult_c
-        
         df_r_c = df_main[df_main['cosecha_id'] == ult_c].groupby('sucursal').agg({'id_credito':'count', 'fpd_num':'sum'}).reset_index()
         df_r_c['rate'] = (df_r_c['fpd_num'] * 100 / df_r_c['id_credito'])
-        
         df_r_p = df_main[df_main['cosecha_id'] == ant_c].groupby('sucursal').agg({'fpd_num':'sum', 'id_credito':'count'}).reset_index()
         df_r_p['rate_ant'] = (df_r_p['fpd_num'] * 100 / df_r_p['id_credito'])
-        
         df_rf = pd.merge(df_r_c, df_r_p[['sucursal', 'rate_ant']], on='sucursal', how='left')
-        
         st.subheader(f"🏆 Rankings Sucursales - Cosecha {ult_c}")
         cr1, cr2 = st.columns(2)
-        
-        # Configuración de columnas dinámica (xxxx = ult_c, yyyy = ant_c)
         conf_rank = {
             "sucursal": "Sucursal", 
             "id_credito": "Créditos", 
@@ -179,13 +186,12 @@ with tabs[0]:
             "rate": st.column_config.NumberColumn(f"%FPD {ult_c}", format="%.2f%%"), 
             "rate_ant": st.column_config.NumberColumn(f"%FPD {ant_c}", format="%.2f%%")
         }
-        
         cr1.markdown("**🔴 Top 10 Riesgo**")
         cr1.dataframe(df_rf.sort_values('rate', ascending=False).head(10), column_config=conf_rank, hide_index=True, use_container_width=True)
         cr2.markdown("**🟢 Bottom 10 Riesgo**")
         cr2.dataframe(df_rf.sort_values('rate', ascending=True).head(10), column_config=conf_rank, hide_index=True, use_container_width=True)
 
-# --- TAB 2: RESUMEN EJECUTIVO ---
+# --- TAB 2: RESUMEN EJECUTIVO (Heatmap Dual) ---
 with tabs[1]:
     st.header("💼 Resumen Ejecutivo Gerencial")
     def render_exec_block(field, title, dim_label):
@@ -199,7 +205,6 @@ with tabs[1]:
             c1, c2 = st.columns(2)
             c1.success(f"**{dim_label} Destacada:** La mejor es **{df_u.iloc[0]['dimension']}** con un **{df_u.iloc[0]['fpd_rate']:.2f}%** en **{mes_u}**, mientras que en **{mes_a}** fue **{df_a.iloc[0]['dimension']}** con un **{df_a.iloc[0]['fpd_rate']:.2f}%**.")
             c2.error(f"**{dim_label} Riesgosa:** La de mayor riesgo es **{df_u.iloc[-1]['dimension']}** con un **{df_u.iloc[-1]['fpd_rate']:.2f}%** en **{mes_u}**, mientras que en **{mes_a}** fue **{df_a.iloc[-1]['dimension']}** con un **{df_a.iloc[-1]['fpd_rate']:.2f}%**.")
-            
             df_tab = pd.merge(df_u[['dimension', 'fpd_si', 'fpd_rate']], df_a[['dimension', 'fpd_si', 'fpd_rate']].rename(columns={'fpd_si':'fpd_si_ant','fpd_rate':'rate_ant'}), on='dimension', how='left')
             st.dataframe(df_tab.style.background_gradient(subset=['fpd_rate','rate_ant'], cmap='YlOrRd').format({'fpd_rate':'{:.2f}%','rate_ant':'{:.2f}%','fpd_si':'{:,.0f}','fpd_si_ant':'{:,.0f}'}),
                          use_container_width=True, hide_index=True, 
@@ -215,7 +220,7 @@ with tabs[1]:
     render_exec_block('producto_agrupado', "Producto", "Producto")
     render_exec_block('sucursal', "Sucursal", "Sucursal")
 
-# --- TAB 3: INSIGHTS ESTRATÉGICOS ---
+# --- TAB 3: INSIGHTS ESTRATÉGICOS (Pareto + Combo) ---
 with tabs[2]:
     if not df_main.empty:
         st.header("💡 Insights Estratégicos")
@@ -224,7 +229,7 @@ with tabs[2]:
         mes_u = MESES_NOMBRE.get(ult_c[-2:], 'N/A').capitalize(); mes_a = MESES_NOMBRE.get(ant_c[-2:], 'N/A').capitalize()
 
         # Heatmap
-        st.subheader("📍 Tendencia de Riesgo Regional (Ranking Salud - 6 Meses)")
+        st.subheader("📍 Tendencia Regional (Ranking Salud - 6 Meses)")
         u6 = lista_c[-6:]
         df_h_base = df_main[df_main['cosecha_id'].isin(u6)]
         df_h_base = df_h_base[~df_h_base['producto_agrupado'].str.upper().str.contains('NOMINA')]
