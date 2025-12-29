@@ -78,11 +78,12 @@ def get_executive_data(field):
           AND sucursal != '999.EMPRESA NOMINA COLABORADORES'
     )
     SELECT strftime(fecha_dt, '%Y%m') as cosecha_id, RIGHT(strftime(fecha_dt, '%Y%m'), 2) as mes_id,
-           dimension, COUNT(id_credito) as total, SUM(fpd_num) as fpd_si,
+           dimension, COUNT(id_credito) as total, SUM(fp_num) as fpd_si,
            (SUM(fpd_num) * 100.0 / COUNT(id_credito)) as fpd_rate
     FROM base WHERE fecha_dt <= (CURRENT_DATE - INTERVAL 2 MONTH) AND fecha_dt IS NOT NULL
     GROUP BY ALL ORDER BY cosecha_id ASC
     """
+    # Nota: se usa fpd_num internamente pero se etiqueta como Casos FPD
     return duckdb.query(query).to_df()
 
 # --- 3. SIDEBAR ---
@@ -138,7 +139,6 @@ with tabs[0]:
             st.plotly_chart(fig3, use_container_width=True)
         with c4:
             st.subheader("Histórico Indicadores")
-            # Consideramos solo las últimas 24 cosechas
             df_t_24 = df_t.tail(24)
             fig4 = go.Figure()
             fig4.add_trace(go.Scatter(x=df_t_24['cosecha_id'], y=df_t_24['%FPD'], name='% FPD'))
@@ -147,7 +147,6 @@ with tabs[0]:
             st.plotly_chart(fig4, use_container_width=True)
 
         st.subheader("Comportamiento %FPD por tipo de cliente")
-        # Consideramos solo las últimas 24 cosechas
         u24 = sorted(df_main['cosecha_id'].unique())[-24:]
         df_tc = df_main[(df_main['tipo_cliente'] != 'Formers') & (df_main['cosecha_id'].isin(u24))].groupby(['cosecha_id', 'tipo_cliente']).agg({'id_credito':'count', 'fpd_num':'sum'}).reset_index()
         df_tc['%FPD'] = (df_tc['fpd_num'] * 100 / df_tc['id_credito'])
@@ -156,20 +155,35 @@ with tabs[0]:
         st.plotly_chart(fig5, use_container_width=True)
 
         st.divider()
+        # Rankings Sucursales con Encabezados Dinámicos
         cosechas = sorted(df_main['cosecha_id'].unique())
-        ant_c = cosechas[-2] if len(cosechas) > 1 else cosechas[-1]
-        df_r_c = df_main[df_main['cosecha_id'] == cosechas[-1]].groupby('sucursal').agg({'id_credito':'count', 'fpd_num':'sum'}).reset_index()
+        ult_c = cosechas[-1]
+        ant_c = cosechas[-2] if len(cosechas) > 1 else ult_c
+        
+        df_r_c = df_main[df_main['cosecha_id'] == ult_c].groupby('sucursal').agg({'id_credito':'count', 'fpd_num':'sum'}).reset_index()
         df_r_c['rate'] = (df_r_c['fpd_num'] * 100 / df_r_c['id_credito'])
+        
         df_r_p = df_main[df_main['cosecha_id'] == ant_c].groupby('sucursal').agg({'fpd_num':'sum', 'id_credito':'count'}).reset_index()
         df_r_p['rate_ant'] = (df_r_p['fpd_num'] * 100 / df_r_p['id_credito'])
+        
         df_rf = pd.merge(df_r_c, df_r_p[['sucursal', 'rate_ant']], on='sucursal', how='left')
-        st.subheader(f"🏆 Rankings Sucursales - Cosecha {cosechas[-1]}")
+        
+        st.subheader(f"🏆 Rankings Sucursales - Cosecha {ult_c}")
         cr1, cr2 = st.columns(2)
-        conf = {"sucursal":"Sucursal", "id_credito":"Créditos", "rate":st.column_config.NumberColumn("% FPD", format="%.2f%%"), "rate_ant":st.column_config.NumberColumn("% Ant", format="%.2f%%")}
+        
+        # Configuración de columnas dinámica (xxxx = ult_c, yyyy = ant_c)
+        conf_rank = {
+            "sucursal": "Sucursal", 
+            "id_credito": "Créditos", 
+            "fpd_num": st.column_config.NumberColumn(f"Casos FPD {ult_c}", format="%d"),
+            "rate": st.column_config.NumberColumn(f"%FPD {ult_c}", format="%.2f%%"), 
+            "rate_ant": st.column_config.NumberColumn(f"%FPD {ant_c}", format="%.2f%%")
+        }
+        
         cr1.markdown("**🔴 Top 10 Riesgo**")
-        cr1.dataframe(df_rf.sort_values('rate', ascending=False).head(10), column_config=conf, hide_index=True, use_container_width=True)
+        cr1.dataframe(df_rf.sort_values('rate', ascending=False).head(10), column_config=conf_rank, hide_index=True, use_container_width=True)
         cr2.markdown("**🟢 Bottom 10 Riesgo**")
-        cr2.dataframe(df_rf.sort_values('rate', ascending=True).head(10), column_config=conf, hide_index=True, use_container_width=True)
+        cr2.dataframe(df_rf.sort_values('rate', ascending=True).head(10), column_config=conf_rank, hide_index=True, use_container_width=True)
 
 # --- TAB 2: RESUMEN EJECUTIVO ---
 with tabs[1]:
@@ -185,9 +199,17 @@ with tabs[1]:
             c1, c2 = st.columns(2)
             c1.success(f"**{dim_label} Destacada:** La mejor es **{df_u.iloc[0]['dimension']}** con un **{df_u.iloc[0]['fpd_rate']:.2f}%** en **{mes_u}**, mientras que en **{mes_a}** fue **{df_a.iloc[0]['dimension']}** con un **{df_a.iloc[0]['fpd_rate']:.2f}%**.")
             c2.error(f"**{dim_label} Riesgosa:** La de mayor riesgo es **{df_u.iloc[-1]['dimension']}** con un **{df_u.iloc[-1]['fpd_rate']:.2f}%** en **{mes_u}**, mientras que en **{mes_a}** fue **{df_a.iloc[-1]['dimension']}** con un **{df_a.iloc[-1]['fpd_rate']:.2f}%**.")
+            
             df_tab = pd.merge(df_u[['dimension', 'fpd_si', 'fpd_rate']], df_a[['dimension', 'fpd_si', 'fpd_rate']].rename(columns={'fpd_si':'fpd_si_ant','fpd_rate':'rate_ant'}), on='dimension', how='left')
             st.dataframe(df_tab.style.background_gradient(subset=['fpd_rate','rate_ant'], cmap='YlOrRd').format({'fpd_rate':'{:.2f}%','rate_ant':'{:.2f}%','fpd_si':'{:,.0f}','fpd_si_ant':'{:,.0f}'}),
-                         use_container_width=True, hide_index=True, column_config={"dimension":dim_label, "fpd_si":f"Casos FPD {mes_u.capitalize()}", "fpd_si_ant":f"Casos FPD {mes_a.capitalize()}", "fpd_rate":f"%FPD {mes_u.capitalize()}", "rate_ant":f"%FPD {mes_a.capitalize()}"})
+                         use_container_width=True, hide_index=True, 
+                         column_config={
+                             "dimension":dim_label, 
+                             "fpd_si":f"Casos FPD {mes_u.capitalize()}", 
+                             "fpd_si_ant":f"Casos FPD {mes_a.capitalize()}", 
+                             "fpd_rate":f"%FPD {mes_u.capitalize()}", 
+                             "rate_ant":f"%FPD {mes_a.capitalize()}"
+                         })
             st.divider()
     render_exec_block('unidad_regional', "Regional", "Regional")
     render_exec_block('producto_agrupado', "Producto", "Producto")
