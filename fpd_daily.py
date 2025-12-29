@@ -223,3 +223,20 @@ with tabs[3]:
         st.subheader(f"Casos FPD encontrados en {ult_cosecha_act}: {len(df_exp)}")
         st.dataframe(df_exp.head(15), use_container_width=True, hide_index=True)
         st.download_button(label=f"💾 Descargar CSV Cosecha {ult_cosecha_act}", data=df_exp.to_csv(index=False).encode('utf-8'), file_name=f'detalle_fpd_{ult_cosecha_act}.csv', mime='text/csv')
+        # BLOQUE DE AUDITORÍA (Agrégalo al final de Tab 4 o en una sección nueva)
+st.subheader("🔍 Auditoría de Datos Perdidos")
+con = duckdb.connect()
+df_perdidos = con.execute("""
+    SELECT 
+        fecha_apertura, 
+        producto_agrupado, 
+        fpd2,
+        COUNT(*) as cantidad
+    FROM 'fpd_gemini.parquet'
+    WHERE TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE) IS NULL 
+       OR TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE) > (CURRENT_DATE - INTERVAL 2 MONTH)
+    GROUP BY ALL
+""").df()
+
+st.write("Registros excluidos por fecha reciente o formato inválido:")
+st.dataframe(df_perdidos)
