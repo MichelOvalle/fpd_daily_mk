@@ -112,37 +112,38 @@ with tabs[0]:
         k3.metric("Tasa FPD2", f"{ult['rate']:.2f}%")
         k4.metric("Tasa NP", f"{ult['np_rate']:.2f}%")
         st.divider()
+        
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Tendencia Global (FPD2)")
-            f1 = px.line(df_t, x='cosecha_id', y='rate', markers=True, text=df_t['rate'].apply(lambda x: f'{x:.1f}%'))
-            f1.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350)
-            st.plotly_chart(f1, use_container_width=True)
+            fig1 = px.line(df_t, x='cosecha_id', y='rate', markers=True, text=df_t['rate'].apply(lambda x: f'{x:.1f}%'))
+            fig1.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350)
+            st.plotly_chart(fig1, use_container_width=True)
         with c2:
             st.subheader("FPD2 por Origen")
             df_o = df_main.groupby(['cosecha_id', 'origen2']).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
             df_o['rate'] = (df_o['fpd2_num'] * 100 / df_o['id_credito'])
-            f2 = px.line(df_o, x='cosecha_id', y='rate', color='origen2', markers=True)
-            f2.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
-            st.plotly_chart(f2, use_container_width=True)
-        
+            fig2 = px.line(df_o, x='cosecha_id', y='rate', color='origen2', markers=True)
+            fig2.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
+            st.plotly_chart(fig2, use_container_width=True)
+
         c3, c4 = st.columns(2)
         with c3:
             st.subheader("Comparativa Interanual")
             df_y = df_main.groupby(['anio', 'mes']).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
             df_y['rate'] = (df_y['fpd2_num'] * 100 / df_y['id_credito'])
-            f3 = px.line(df_y[df_y['anio'].isin([2023, 2024, 2025])], x='mes', y='rate', color=df_y['anio'].astype(str), markers=True)
-            f3.update_layout(xaxis=dict(ticktext=list(MESES_NOMBRE.values()), tickvals=list(MESES_NOMBRE.keys())), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
-            st.plotly_chart(f3, use_container_width=True)
+            fig3 = px.line(df_y[df_y['anio'].isin([2023, 2024, 2025])], x='mes', y='rate', color=df_y['anio'].astype(str), markers=True)
+            fig3.update_layout(xaxis=dict(ticktext=list(MESES_NOMBRE.values()), tickvals=list(MESES_NOMBRE.keys())), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
+            st.plotly_chart(fig3, use_container_width=True)
         with c4:
             st.subheader("FPD2 vs NP")
-            f4 = go.Figure()
-            f4.add_trace(go.Scatter(x=df_t['cosecha_id'], y=df_t['rate'], name='% FPD2'))
-            f4.add_trace(go.Scatter(x=df_t['cosecha_id'], y=df_t['np_rate'], name='% NP', line=dict(dash='dash')))
-            f4.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
-            st.plotly_chart(f4, use_container_width=True)
+            fig4 = go.Figure()
+            fig4.add_trace(go.Scatter(x=df_t['cosecha_id'], y=df_t['rate'], name='% FPD2'))
+            fig4.add_trace(go.Scatter(x=df_t['cosecha_id'], y=df_t['np_rate'], name='% NP', line=dict(dash='dash')))
+            fig4.update_layout(xaxis=dict(type='category'), plot_bgcolor='white', height=350, legend=LEGEND_BOTTOM)
+            st.plotly_chart(fig4, use_container_width=True)
 
-# --- TAB 2: RESUMEN EJECUTIVO (Truco de redacción + Tablas) ---
+# --- TAB 2: RESUMEN EJECUTIVO ---
 with tabs[1]:
     st.header("💼 Resumen Ejecutivo Gerencial")
     def render_exec_block(field, title, dim_label):
@@ -174,14 +175,21 @@ with tabs[2]:
         mes_u = MESES_NOMBRE.get(ult_c[-2:], 'N/A').capitalize()
         mes_a = MESES_NOMBRE.get(ant_c[-2:], 'N/A').capitalize()
 
-        # 1. Heatmap Regional (Excluyendo Nóminas y con escala invertida)
-        st.subheader("📍 Tendencia de Riesgo Regional (Últimos 6 Meses)")
+        # 1. Heatmap Regional (Excluyendo Nóminas + ORDENADO POR ÚLTIMO MES)
+        st.subheader("📍 Tendencia de Riesgo Regional (Ranking Ordenado Últimos 6 Meses)")
         u6 = lista_c[-6:]
         df_h_base = df_main[df_main['cosecha_id'].isin(u6)]
         df_h_base = df_h_base[~df_h_base['producto_agrupado'].str.upper().str.contains('NOMINA')]
         df_h = df_h_base.groupby(['unidad_regional','cosecha_id']).agg({'fpd2_num':'sum','id_credito':'count'}).reset_index()
         df_h['rate'] = (df_h['fpd2_num']*100/df_h['id_credito'])
-        st.dataframe(df_h.pivot(index='unidad_regional', columns='cosecha_id', values='rate').style.background_gradient(cmap='RdYlGn_r').format("{:.2f}%"), use_container_width=True)
+        
+        # Lógica de Ordenamiento
+        pivot_h = df_h.pivot(index='unidad_regional', columns='cosecha_id', values='rate')
+        # Ordenamos por la última columna disponible (el último mes) de menor a mayor riesgo
+        pivot_h = pivot_h.sort_values(by=pivot_h.columns[-1], ascending=True)
+        
+        st.dataframe(pivot_h.style.background_gradient(cmap='RdYlGn_r').format("{:.2f}%"), use_container_width=True)
+        st.caption(f"Nota: La tabla está ordenada de menor a mayor riesgo basándose en el desempeño de {mes_u}.")
         
         st.divider()
 
@@ -196,12 +204,10 @@ with tabs[2]:
 
         st.divider()
 
-        # 3. PRUEBA: Gráfica Comparativa Monto (Oct vs Sep)
+        # 3. Comparativa de Montos (Octubre vs Septiembre)
         st.subheader(f"💰 Volumen y Calidad: Comparativa {mes_u} vs {mes_a}")
         bins = [0, 3000, 5000, 8000, 12000, 20000, float('inf')]
         labels = ['$0-$3k', '$3k-$5k', '$5k-$8k', '$8k-$12k', '$12k-$20k', '>$20k']
-        
-        # Procesar ambos meses
         df_comp = df_main[df_main['cosecha_id'].isin([ult_c, ant_c])].copy()
         df_comp['rango'] = pd.cut(df_comp['monto_otorgado'], bins=bins, labels=labels, include_lowest=True)
         df_s = df_comp.groupby(['cosecha_id', 'rango'], observed=True).agg({'id_credito':'count', 'fpd2_num':'sum'}).reset_index()
@@ -211,12 +217,8 @@ with tabs[2]:
         df_ant = df_s[df_s['cosecha_id'] == ant_c]
 
         fig_combo = make_subplots(specs=[[{"secondary_y": True}]])
-        
-        # Barras (Volumen)
         fig_combo.add_trace(go.Bar(x=df_ult['rango'], y=df_ult['id_credito'], name=f"Créditos {mes_u}", marker_color='#2E86C1'), secondary_y=False)
         fig_combo.add_trace(go.Bar(x=df_ant['rango'], y=df_ant['id_credito'], name=f"Créditos {mes_a}", marker_color='#AED6F1'), secondary_y=False)
-        
-        # Líneas (Riesgo)
         fig_combo.add_trace(go.Scatter(x=df_ult['rango'], y=df_ult['rate'], name=f"% FPD {mes_u}", mode='lines+markers', line=dict(color='#C0392B', width=4)), secondary_y=True)
         fig_combo.add_trace(go.Scatter(x=df_ant['rango'], y=df_ant['rate'], name=f"% FPD {mes_a}", mode='lines+markers', line=dict(color='#E67E22', width=2, dash='dash')), secondary_y=True)
         
@@ -224,4 +226,3 @@ with tabs[2]:
         fig_combo.update_yaxes(title_text="Cantidad de Créditos", secondary_y=False)
         fig_combo.update_yaxes(title_text="% Tasa FPD2", secondary_y=True, ticksuffix="%", range=[0, df_s['rate'].max()*1.3 if not df_s['rate'].empty else 10])
         st.plotly_chart(fig_combo, use_container_width=True)
-        st.caption(f"Análisis comparativo: Las barras muestran cuánto se colocó y las líneas qué tan riesgoso fue cada rango en {mes_u} vs {mes_a}.")
