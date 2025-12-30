@@ -26,7 +26,7 @@ def get_filter_universes():
             COALESCE(sucursal, 'N/A') as sucursal, 
             COALESCE(producto_agrupado, 'N/A') as producto_agrupado, 
             COALESCE(tipo_cliente, 'N/A') as tipo_cliente 
-        FROM 'fpd_gemini.parquet'
+        FROM 'https://github.com/MichelOvalle/fpd_daily_mk/raw/refs/heads/main/fpd_gemini.parquet'
     """).df()
 
 @st.cache_data
@@ -45,7 +45,7 @@ def get_main_data(regionales, sucursales, productos, tipos):
             COALESCE(sucursal, 'N/A') as sucursal, 
             COALESCE(unidad_regional, 'N/A') as unidad_regional, 
             COALESCE(producto_agrupado, 'N/A') as producto_agrupado
-        FROM 'fpd_gemini.parquet'
+        FROM 'https://github.com/MichelOvalle/fpd_daily_mk/raw/refs/heads/main/fpd_gemini.parquet'
     ),
     filtrado AS (
         SELECT * FROM base WHERE 1=1
@@ -69,7 +69,7 @@ def get_executive_data(field):
             CASE WHEN fpd2 = 'FPD' THEN 1 ELSE 0 END as fpd_num,
             id_credito, COALESCE({field}, 'N/A') as dimension,
             producto_agrupado, sucursal
-        FROM 'fpd_gemini.parquet'
+        FROM 'https://github.com/MichelOvalle/fpd_daily_mk/raw/refs/heads/main/fpd_gemini.parquet'
         WHERE UPPER(producto_agrupado) NOT LIKE '%NOMINA%'
           AND sucursal != '999.EMPRESA NOMINA COLABORADORES'
     )
