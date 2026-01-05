@@ -30,17 +30,20 @@ LEGEND_BOTTOM = dict(
     x=0.5
 )
 
-# Función para obtener la fecha de actualización exclusiva del archivo Parquet
+# --- FUNCIÓN CRÍTICA: FECHA DE ACTUALIZACIÓN DEL PARQUET ---
 def get_last_update():
-    # Buscamos específicamente el archivo parquet en el directorio del script
-    target = os.path.join(os.path.dirname(__file__), DATA_PATH)
-    if os.path.exists(target):
-        # Obtenemos el timestamp de modificación del archivo de datos
-        mtime = os.path.getmtime(target)
-        # Ajuste a México (UTC-6). En Streamlit Cloud el sistema suele estar en UTC.
+    # Obtenemos la ruta absoluta del directorio donde vive este script
+    dir_path = os.path.dirname(os.path.abspath(__file__))
+    # Unimos la ruta con el nombre del archivo parquet
+    target_file = os.path.join(dir_path, DATA_PATH)
+    
+    if os.path.exists(target_file):
+        # Obtenemos el timestamp de modificación del archivo físico .parquet
+        mtime = os.path.getmtime(target_file)
+        # Ajuste a México (UTC-6)
         dt_mex = datetime.fromtimestamp(mtime) - timedelta(hours=6)
         return dt_mex.strftime("%d/%m/%Y %I:%M %p")
-    return "Pendiente de carga"
+    return "Archivo no encontrado"
 
 # --- 2. FUNCIONES DE DATOS ---
 
