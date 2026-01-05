@@ -8,9 +8,13 @@ import os
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURACIÓN Y ESTILOS ---
-st.set_page_config(page_title="Monitor FPD - Dashboard Pro", layout="wide", page_icon="📊")
+st.set_page_config(
+    page_title="Monitor FPD - Dashboard Pro",
+    layout="wide",
+    page_icon="📊"
+)
 
-# Nombre del archivo actualizado según tu instrucción
+# Nombre del archivo que actualiza GitHub Actions
 DATA_PATH = 'fpd_gemini.parquet'
 
 MESES_NOMBRE = {
@@ -18,13 +22,20 @@ MESES_NOMBRE = {
     '07': 'julio', '08': 'agosto', '09': 'septiembre', '10': 'octubre', '11': 'noviembre', '12': 'diciembre'
 }
 
-LEGEND_BOTTOM = dict(orientation="h", yanchor="top", y=-0.3, xanchor="center", x=0.5)
+LEGEND_BOTTOM = dict(
+    orientation="h",
+    yanchor="top",
+    y=-0.3,
+    xanchor="center",
+    x=0.5
+)
 
-# Función para obtener la fecha de actualización (Ajustada a México UTC-6)
+# Función para obtener la fecha de actualización exclusiva del archivo Parquet
 def get_last_update():
     if os.path.exists(DATA_PATH):
+        # Leemos específicamente los metadatos del archivo de datos
         mtime = os.path.getmtime(DATA_PATH)
-        # Ajuste manual: Streamlit Cloud suele estar en UTC
+        # Ajuste manual a México (UTC-6)
         dt_mex = datetime.fromtimestamp(mtime) - timedelta(hours=6)
         return dt_mex.strftime("%d/%m/%Y %I:%M %p")
     return "N/A"
@@ -37,14 +48,15 @@ def get_filter_universes():
         st.error(f"⚠️ El archivo '{DATA_PATH}' no se encuentra en el repositorio.")
         return pd.DataFrame(columns=['unidad_regional', 'sucursal', 'producto_agrupado', 'tipo_cliente'])
     
-    return duckdb.query(f"""
+    query = f"""
         SELECT DISTINCT 
             COALESCE(unidad_regional, 'N/A') as unidad_regional, 
             COALESCE(sucursal, 'N/A') as sucursal, 
             COALESCE(producto_agrupado, 'N/A') as producto_agrupado, 
             COALESCE(tipo_cliente, 'N/A') as tipo_cliente 
         FROM '{DATA_PATH}'
-    """).df()
+    """
+    return duckdb.query(query).df()
 
 @st.cache_data
 def get_main_data(regionales, sucursales, productos, tipos):
@@ -74,8 +86,12 @@ def get_main_data(regionales, sucursales, productos, tipos):
         {"AND producto_agrupado IN (" + to_sql_list(productos) + ")" if productos else ""}
         {"AND tipo_cliente IN (" + to_sql_list(tipos) + ")" if tipos else ""}
     )
-    SELECT *, strftime(fecha_dt, '%Y%m') as cosecha_id, EXTRACT(YEAR FROM fecha_dt) as anio, strftime(fecha_dt, '%m') as mes
-    FROM filtrado WHERE fecha_dt IS NOT NULL
+    SELECT *, 
+           strftime(fecha_dt, '%Y%m') as cosecha_id, 
+           EXTRACT(YEAR FROM fecha_dt) as anio, 
+           strftime(fecha_dt, '%m') as mes
+    FROM filtrado 
+    WHERE fecha_dt IS NOT NULL
     """
     
     try:
@@ -86,40 +102,50 @@ def get_main_data(regionales, sucursales, productos, tipos):
 
 @st.cache_data
 def get_executive_data(field):
-    if not os.path.exists(DATA_PATH): return pd.DataFrame()
+    if not os.path.exists(DATA_PATH): 
+        return pd.DataFrame()
     
     query = f"""
     WITH base AS (
         SELECT 
             CAST(fecha_apertura AS DATE) as fecha_dt,
             CASE WHEN fpd2 = 'FPD' THEN 1 ELSE 0 END as fpd_num,
-            id_credito, COALESCE({field}, 'N/A') as dimension,
-            producto_agrupado, sucursal
+            id_credito, 
+            COALESCE({field}, 'N/A') as dimension,
+            producto_agrupado, 
+            sucursal
         FROM '{DATA_PATH}'
         WHERE UPPER(producto_agrupado) NOT LIKE '%NOMINA%'
           AND sucursal != '999.EMPRESA NOMINA COLABORADORES'
     )
     SELECT strftime(fecha_dt, '%Y%m') as cosecha_id, 
-           dimension, COUNT(id_credito) as total_vol, 
+           dimension, 
+           COUNT(id_credito) as total_vol, 
            SUM(fpd_num) as fpd_si, 
            (SUM(fpd_num) * 100.0 / COUNT(id_credito)) as fpd_rate
-    FROM base WHERE fecha_dt IS NOT NULL
-    GROUP BY ALL ORDER BY cosecha_id ASC
+    FROM base 
+    WHERE fecha_dt IS NOT NULL
+    GROUP BY ALL 
+    ORDER BY cosecha_id ASC
     """
     return duckdb.query(query).to_df()
 
 # --- 3. PROCESAMIENTO SIDEBAR ---
 opt = get_filter_universes()
+
 st.sidebar.header("🎯 Filtros Dashboard")
-sel_reg = st.sidebar.multiselect("📍 Regional", options=sorted(opt['unidad_regional'].unique()))
-suc_disp = sorted(opt[opt['unidad_regional'].isin(sel_reg)]['sucursal'].unique()) if sel_reg else sorted(opt['sucursal'].unique())
-sel_suc = st.sidebar.multiselect("🏠 Sucursal", options=suc_disp)
-sel_prod = st.sidebar.multiselect("📦 Producto", options=sorted(opt['producto_agrupado'].unique()))
-sel_tip = st.sidebar.multiselect("👥 Tipo Cliente", options=sorted(opt['tipo_cliente'].unique()))
+if not opt.empty:
+    sel_reg = st.sidebar.multiselect("📍 Regional", options=sorted(opt['unidad_regional'].unique()))
+    suc_disp = sorted(opt[opt['unidad_regional'].isin(sel_reg)]['sucursal'].unique()) if sel_reg else sorted(opt['sucursal'].unique())
+    sel_suc = st.sidebar.multiselect("🏠 Sucursal", options=suc_disp)
+    sel_prod = st.sidebar.multiselect("📦 Producto", options=sorted(opt['producto_agrupado'].unique()))
+    sel_tip = st.sidebar.multiselect("👥 Tipo Cliente", options=sorted(opt['tipo_cliente'].unique()))
+else:
+    sel_reg = sel_suc = sel_prod = sel_tip = []
 
 df_main = get_main_data(sel_reg, sel_suc, sel_prod, sel_tip)
 
-# --- 4. LÓGICA DE FILTRADO GLOBAL (IGNORAR MÁXIMO) ---
+# --- 4. LÓGICA DE FILTRADO GLOBAL ---
 df_fpd = pd.DataFrame()
 if not df_main.empty:
     max_c_real = df_main['cosecha_id'].max()
@@ -141,7 +167,8 @@ with tabs[0]:
         df_t = df_fpd.groupby('cosecha_id').agg({'id_credito':'count', 'fpd_num':'sum', 'np_num':'sum'}).reset_index()
         df_t['%FPD'] = (df_t['fpd_num'] * 100 / df_t['id_credito'])
         df_t['np_rate'] = (df_t['np_num'] * 100 / df_t['id_credito'])
-        ult = df_t.iloc[-1]; ant = df_t.iloc[-2] if len(df_t) > 1 else ult
+        ult = df_t.iloc[-1]
+        ant = df_t.iloc[-2] if len(df_t) > 1 else ult
         
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Cosecha Actual", ult['cosecha_id'], f"Anterior: {ant['cosecha_id']}", delta_color="off")
@@ -195,14 +222,7 @@ with tabs[0]:
         
         st.subheader(f"🏆 Rankings Sucursales - Cosecha {ult_c_id}")
         cr1, cr2 = st.columns(2)
-        conf_rank = {
-            "sucursal": "Sucursal", 
-            "id_credito": f"Créditos {ult_c_id}", 
-            "id_credito_ant": f"Créditos {ant_c_id}", 
-            "fpd_num": st.column_config.NumberColumn(f"Casos FPD {ult_c_id}", format="%d"), 
-            "rate": st.column_config.NumberColumn(f"%FPD {ult_c_id}", format="%.2f%%"), 
-            "rate_ant": st.column_config.NumberColumn(f"%FPD {ant_c_id}", format="%.2f%%")
-        }
+        conf_rank = {"sucursal": "Sucursal", "id_credito": f"Créditos {ult_c_id}", "id_credito_ant": f"Créditos {ant_c_id}", "fpd_num": st.column_config.NumberColumn(f"Casos FPD {ult_c_id}", format="%d"), "rate": st.column_config.NumberColumn(f"%FPD {ult_c_id}", format="%.2f%%"), "rate_ant": st.column_config.NumberColumn(f"%FPD {ant_c_id}", format="%.2f%%")}
         cr1.markdown("**🔴 Top 10 Riesgo**")
         cr1.dataframe(df_rf.sort_values('rate', ascending=False).head(10), column_config=conf_rank, hide_index=True, use_container_width=True)
         cr2.markdown("**🟢 Bottom 10 Riesgo**")
@@ -223,18 +243,11 @@ with tabs[1]:
                 m_a = MESES_NOMBRE.get(a_e[-2:])
                 df_u = df_e[df_e['cosecha_id'] == u_e].sort_values('fpd_rate')
                 df_a = df_e[df_e['cosecha_id'] == a_e].sort_values('fpd_rate')
-                
                 c1, c2 = st.columns(2)
                 c1.success(f"**{dim_label} Destacada:** La mejor es **{df_u.iloc[0]['dimension']}** con un **{df_u.iloc[0]['fpd_rate']:.2f}%** de FPD en **{m_u}**, mientras que en **{m_a}** fue **{df_a.iloc[0]['dimension']}** con un **{df_a.iloc[0]['fpd_rate']:.2f}%**.")
                 c2.error(f"**{dim_label} Riesgosa:** La de mayor riesgo es **{df_u.iloc[-1]['dimension']}** con un **{df_u.iloc[-1]['fpd_rate']:.2f}%** en **{m_u}**, mientras que en **{m_a}** fue **{df_a.iloc[-1]['dimension']}** con un **{df_a.iloc[-1]['fpd_rate']:.2f}%**.")
-                
-                df_tab = pd.merge(df_u[['dimension', 'total_vol', 'fpd_si', 'fpd_rate']], 
-                                  df_a[['dimension', 'total_vol', 'fpd_si', 'fpd_rate']].rename(columns={'total_vol':'vol_ant','fpd_si':'fpd_ant','fpd_rate':'rate_ant'}), 
-                                  on='dimension', how='left')
-                
-                st.dataframe(df_tab.style.background_gradient(subset=['fpd_rate','rate_ant'], cmap='YlOrRd').format({'fpd_rate':'{:.2f}%','rate_ant':'{:.2f}%','fpd_si':'{:,.0f}','fpd_ant':'{:,.0f}','total_vol':'{:,.0f}','vol_ant':'{:,.0f}'}),
-                               use_container_width=True, hide_index=True, 
-                               column_config={"dimension":dim_label, "total_vol":f"Créditos {m_u.capitalize()}", "vol_ant":f"Créditos {m_a.capitalize()}", "fpd_si":f"Casos FPD {m_u.capitalize()}", "fpd_ant":f"Casos FPD {m_a.capitalize()}", "fpd_rate":f"%FPD {m_u.capitalize()}", "rate_ant":f"%FPD {m_a.capitalize()}"})
+                df_tab = pd.merge(df_u[['dimension', 'total_vol', 'fpd_si', 'fpd_rate']], df_a[['dimension', 'total_vol', 'fpd_si', 'fpd_rate']].rename(columns={'total_vol':'vol_ant','fpd_si':'fpd_ant','fpd_rate':'rate_ant'}), on='dimension', how='left')
+                st.dataframe(df_tab.style.background_gradient(subset=['fpd_rate','rate_ant'], cmap='YlOrRd').format({'fpd_rate':'{:.2f}%','rate_ant':'{:.2f}%','fpd_si':'{:,.0f}','fpd_ant':'{:,.0f}','total_vol':'{:,.0f}','vol_ant':'{:,.0f}'}), use_container_width=True, hide_index=True, column_config={"dimension":dim_label, "total_vol":f"Créditos {m_u.capitalize()}", "vol_ant":f"Créditos {m_a.capitalize()}", "fpd_si":f"Casos FPD {m_u.capitalize()}", "fpd_ant":f"Casos FPD {m_a.capitalize()}", "fpd_rate":f"%FPD {m_u.capitalize()}", "rate_ant":f"%FPD {m_a.capitalize()}"})
                 st.divider()
         
         render_exec_block('unidad_regional', 'Regional')
@@ -283,26 +296,19 @@ with tabs[3]:
         lista_export = sorted(df_main['cosecha_id'].unique(), reverse=True)[:2] 
         idx_defecto = 1 if len(lista_export) > 1 else 0
         cosecha_export = st.selectbox("Selecciona la cosecha a exportar:", options=lista_export, index=idx_defecto)
-        
         df_exp = df_main[(df_main['cosecha_id'] == cosecha_export) & (df_main['fpd2'] == 'FPD')].copy()
         cols = ['id_credito', 'id_segmento', 'id_producto', 'producto_agrupado', 'origen2', 'cosecha_id', 'monto_otorgado', 'cuota', 'sucursal']
         df_exp = df_exp[cols].rename(columns={'cosecha_id':'cosecha'})
-        
         st.subheader(f"Casos FPD encontrados en {cosecha_export}: {len(df_exp)}")
         st.dataframe(df_exp, use_container_width=True, hide_index=True)
-        st.download_button(
-            label=f"💾 Descargar CSV {cosecha_export}", 
-            data=df_exp.to_csv(index=False).encode('utf-8'), 
-            file_name=f'detalle_fpd_{cosecha_export}.csv', 
-            mime='text/csv'
-        )
+        st.download_button(label=f"💾 Descargar CSV {cosecha_export}", data=df_exp.to_csv(index=False).encode('utf-8'), file_name=f'detalle_fpd_{cosecha_export}.csv', mime='text/csv')
 
 # --- 5. PIE DE PÁGINA ---
 st.divider()
 last_update = get_last_update()
 st.markdown(f"""
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
-        📅 <b>Última actualización de datos:</b> {last_update} (Hora México)<br>
+        📅 <b>Última actualización de datos (Parquet):</b> {last_update} (Hora México)<br>
         © 2026 Monitor de Riesgo FPD - Dashboard Pro
     </div>
 """, unsafe_allow_html=True)
