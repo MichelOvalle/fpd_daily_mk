@@ -6,6 +6,7 @@ from plotly.subplots import make_subplots
 import duckdb
 import os
 from datetime import datetime, timedelta
+from pathlib import Path
 
 # --- 1. CONFIGURACIÓN Y ESTILOS ---
 st.set_page_config(
@@ -30,20 +31,22 @@ LEGEND_BOTTOM = dict(
     x=0.5
 )
 
-# --- FUNCIÓN CRÍTICA: FECHA DE ACTUALIZACIÓN DEL PARQUET ---
+# --- FUNCIÓN DE PRECISIÓN PARA EL PARQUET ---
 def get_last_update():
-    # Obtenemos la ruta absoluta del directorio donde vive este script
-    dir_path = os.path.dirname(os.path.abspath(__file__))
-    # Unimos la ruta con el nombre del archivo parquet
-    target_file = os.path.join(dir_path, DATA_PATH)
-    
-    if os.path.exists(target_file):
-        # Obtenemos el timestamp de modificación del archivo físico .parquet
-        mtime = os.path.getmtime(target_file)
-        # Ajuste a México (UTC-6)
-        dt_mex = datetime.fromtimestamp(mtime) - timedelta(hours=6)
-        return dt_mex.strftime("%d/%m/%Y %I:%M %p")
-    return "Archivo no encontrado"
+    try:
+        # Usamos Path para obtener una referencia absoluta al archivo de datos
+        archivo_data = Path(__file__).parent / DATA_PATH
+        
+        if archivo_data.exists():
+            # Obtenemos el tiempo de modificación del archivo físico
+            timestamp = archivo_data.stat().st_mtime
+            # Convertimos a datetime y ajustamos a México (UTC-6)
+            dt_mex = datetime.fromtimestamp(timestamp) - timedelta(hours=6)
+            return dt_mex.strftime("%d/%m/%Y %I:%M %p")
+        else:
+            return "Archivo .parquet no encontrado"
+    except Exception:
+        return "Error al leer metadatos"
 
 # --- 2. FUNCIONES DE DATOS ---
 
