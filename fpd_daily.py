@@ -16,6 +16,7 @@ st.set_page_config(
 
 # Nombre del archivo que actualiza GitHub Actions
 DATA_PATH = 'fpd_gemini.parquet'
+TIME_FILE = "last_update.txt"
 
 MESES_NOMBRE = {
     '01': 'enero', '02': 'febrero', '03': 'marzo', '04': 'abril', '05': 'mayo', '06': 'junio',
@@ -32,13 +33,14 @@ LEGEND_BOTTOM = dict(
 
 # Función para obtener la fecha de actualización exclusiva del archivo Parquet
 def get_last_update():
-    if os.path.exists(DATA_PATH):
-        # Leemos específicamente los metadatos del archivo de datos
-        mtime = os.path.getmtime(DATA_PATH)
-        # Ajuste manual a México (UTC-6)
-        dt_mex = datetime.fromtimestamp(mtime) - timedelta(hours=6)
-        return dt_mex.strftime("%d/%m/%Y %I:%M %p")
-    return "N/A"
+    """Lee el contenido del archivo generado por el proceso de carga."""
+    if os.path.exists(TIME_FILE):
+        try:
+            with open(TIME_FILE, "r") as f:
+                return f.read().strip()
+        except Exception:
+            return "Error al leer marca de tiempo"
+    return "Sincronizando..."
 
 # --- 2. FUNCIONES DE DATOS ---
 
