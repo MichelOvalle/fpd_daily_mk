@@ -31,24 +31,25 @@ LEGEND_BOTTOM = dict(
     x=0.5
 )
 
-# --- FUNCIÓN CON RUTA ABSOLUTA EXPLÍCITA ---
+# --- FUNCIÓN DE ÚLTIMA INSTANCIA PARA EL TIMESTAMP ---
 def get_last_update():
     try:
-        # Obtenemos el directorio actual de trabajo (Root del repo en el servidor)
-        base_path = Path.cwd() 
-        # Forzamos la ruta absoluta al archivo parquet
-        target_file = base_path / DATA_PATH
+        # 1. Obtenemos la ruta absoluta donde reside este script específicamente
+        script_dir = Path(__file__).resolve().parent
+        # 2. Construimos la ruta exacta al archivo parquet
+        parquet_file = script_dir / DATA_PATH
         
-        if target_file.exists():
-            # Obtenemos la fecha de modificación del archivo físico
-            timestamp = target_file.stat().st_mtime
+        if parquet_file.exists():
+            # 3. Obtenemos los metadatos de modificación del archivo físico
+            stats = parquet_file.stat()
+            timestamp = stats.st_mtime
             # Ajuste a México (UTC-6)
             dt_mex = datetime.fromtimestamp(timestamp) - timedelta(hours=6)
             return dt_mex.strftime("%d/%m/%Y %I:%M %p")
         else:
-            return "Archivo no detectado en ruta absoluta"
+            return "Archivo Parquet no localizado"
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error de lectura: {str(e)}"
 
 # --- 2. FUNCIONES DE DATOS ---
 
