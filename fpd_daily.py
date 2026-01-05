@@ -32,13 +32,15 @@ LEGEND_BOTTOM = dict(
 
 # Función para obtener la fecha de actualización exclusiva del archivo Parquet
 def get_last_update():
-    if os.path.exists(DATA_PATH):
-        # Leemos específicamente los metadatos del archivo de datos
-        mtime = os.path.getmtime(DATA_PATH)
-        # Ajuste manual a México (UTC-6)
+    # Buscamos específicamente el archivo parquet en el directorio del script
+    target = os.path.join(os.path.dirname(__file__), DATA_PATH)
+    if os.path.exists(target):
+        # Obtenemos el timestamp de modificación del archivo de datos
+        mtime = os.path.getmtime(target)
+        # Ajuste a México (UTC-6). En Streamlit Cloud el sistema suele estar en UTC.
         dt_mex = datetime.fromtimestamp(mtime) - timedelta(hours=6)
         return dt_mex.strftime("%d/%m/%Y %I:%M %p")
-    return "N/A"
+    return "Pendiente de carga"
 
 # --- 2. FUNCIONES DE DATOS ---
 
