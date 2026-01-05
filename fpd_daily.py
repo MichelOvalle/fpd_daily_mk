@@ -6,6 +6,9 @@ from plotly.subplots import make_subplots
 import duckdb
 import os
 from datetime import datetime, timedelta
+import json
+import urllib.request
+from datetime import datetime, timedelta
 
 # --- 1. CONFIGURACIÓN Y ESTILOS ---
 st.set_page_config(
@@ -13,6 +16,43 @@ st.set_page_config(
     layout="wide",
     page_icon="📊"
 )
+
+
+# --- 2. CONSTANTES DEL REPOSITORIO (8:54 AM) ---
+# Michel, asegúrate de que estos nombres coincidan con tu repo red_v5
+GITHUB_USER = "michel-ovalle" 
+GITHUB_REPO = "red_v5"
+DATA_FILE = "fpd_gemini.parquet"
+
+def obtener_fecha_github():
+    """
+    Consulta directamente a GitHub para obtener la hora del commit del parquet.
+    Esto soluciona el problema de ver la hora del archivo .py.
+    """
+    api_endpoint = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/commits?path={DATA_FILE}&page=1&per_page=1"
+    
+    try:
+        # Petición HTTP manual para evitar dependencias extra
+        headers = {"User-Agent": "Streamlit-Monitor-App"}
+        peticion = urllib.request.Request(api_endpoint, headers=headers)
+        
+        with urllib.request.urlopen(peticion) as respuesta:
+            datos_json = json.loads(respuesta.read().decode())
+            # Extraemos la fecha del commit (UTC)
+            fecha_utc_str = datos_json[0]['commit']['committer']['date']
+            fecha_dt = datetime.strptime(fecha_utc_str, "%Y-%m-%dT%H:%M:%SZ")
+            
+            # Ajuste manual a la zona horaria de México (UTC-6)
+            fecha_mexico = fecha_dt - timedelta(hours=6)
+            return fecha_mexico.strftime("%d/%m/%Y %I:%M %p")
+            
+    except Exception:
+        # Fallback local: si la API falla, intentamos leer el archivo físico
+        if os.path.exists(DATA_FILE):
+            timestamp_local = os.path.getmtime(DATA_FILE)
+            dt_local = datetime.fromtimestamp(timestamp_local) - timedelta(hours=6)
+            return dt_local.strftime("%d/%m/%Y %I:%M %p")
+        return "Sincronizando con GitHub..."
 
 # Nombre del archivo que actualiza GitHub Actions
 DATA_PATH = 'fpd_gemini.parquet'
@@ -310,7 +350,7 @@ with tabs[3]:
 
 # --- 5. PIE DE PÁGINA ---
 st.divider()
-last_update = get_last_update()
+last_update = obtener_fecha_github()
 st.markdown(f"""
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         📅 <b>Última actualización de datos (Parquet):</b> {last_update} (Hora México)<br>
