@@ -41,21 +41,14 @@ def get_main_data(regionales, sucursales, productos, tipos):
     if not os.path.exists(DATA_PATH): 
         return pd.DataFrame()
     
-    # --- DIAGNÓSTICO DE COLUMNAS PARA SOLUCIONAR BINDEREXCEPTION ---
-    try:
-        columnas_reales = duckdb.query(f"DESCRIBE SELECT * FROM '{DATA_PATH}'").df()['column_name'].tolist()
-        st.sidebar.info(f"🔍 Columnas en archivo: {', '.join(columnas_reales)}")
-    except Exception as e:
-        st.error(f"Error al leer metadatos: {e}")
-    # -------------------------------------------------------------
-
     def to_sql_list(lista):
         return "'" + "','".join(lista) + "'"
     
+    # Hemos eliminado strptime porque fecha_apertura ya viene como DATE
     query = f"""
     WITH base AS (
         SELECT 
-            TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE) as fecha_dt,
+            CAST(fecha_apertura AS DATE) as fecha_dt,
             CASE WHEN fpd2 = 'FPD' THEN 1 ELSE 0 END as fpd_num,
             CASE WHEN NP = 'NP' THEN 1 ELSE 0 END as np_num,
             id_credito, id_segmento, id_producto, origen2, monto_otorgado, cuota, fpd2,
@@ -79,18 +72,18 @@ def get_main_data(regionales, sucursales, productos, tipos):
     try:
         return duckdb.query(query).to_df()
     except Exception as e:
-        st.error(f"❌ Error detallado de DuckDB: {e}")
-        st.warning("Es probable que los nombres de las columnas en el archivo Parquet hayan cambiado.")
+        st.error(f"❌ Error de DuckDB: {e}")
         return pd.DataFrame()
 
 @st.cache_data
 def get_executive_data(field):
     if not os.path.exists(DATA_PATH): return pd.DataFrame()
     
+    # Aquí también ajustamos el CAST para evitar el error de strptime
     query = f"""
     WITH base AS (
         SELECT 
-            TRY_CAST(strptime(fecha_apertura, '%d/%m/%Y') AS DATE) as fecha_dt,
+            CAST(fecha_apertura AS DATE) as fecha_dt,
             CASE WHEN fpd2 = 'FPD' THEN 1 ELSE 0 END as fpd_num,
             id_credito, COALESCE({field}, 'N/A') as dimension,
             producto_agrupado, sucursal
