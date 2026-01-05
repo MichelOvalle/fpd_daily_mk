@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import duckdb
 import os
+from datetime import datetime, timedelta
 
 # --- 1. CONFIGURACIÓN Y ESTILOS ---
 st.set_page_config(page_title="Monitor FPD - Dashboard Pro", layout="wide", page_icon="📊")
@@ -18,6 +19,15 @@ MESES_NOMBRE = {
 }
 
 LEGEND_BOTTOM = dict(orientation="h", yanchor="top", y=-0.3, xanchor="center", x=0.5)
+
+# Función para obtener la fecha de actualización (Ajustada a México UTC-6)
+def get_last_update():
+    if os.path.exists(DATA_PATH):
+        mtime = os.path.getmtime(DATA_PATH)
+        # Ajuste manual: Streamlit Cloud suele estar en UTC
+        dt_mex = datetime.fromtimestamp(mtime) - timedelta(hours=6)
+        return dt_mex.strftime("%d/%m/%Y %I:%M %p")
+    return "N/A"
 
 # --- 2. FUNCIONES DE DATOS ---
 
@@ -44,7 +54,6 @@ def get_main_data(regionales, sucursales, productos, tipos):
     def to_sql_list(lista):
         return "'" + "','".join(lista) + "'"
     
-    # Hemos eliminado strptime porque fecha_apertura ya viene como DATE
     query = f"""
     WITH base AS (
         SELECT 
@@ -79,7 +88,6 @@ def get_main_data(regionales, sucursales, productos, tipos):
 def get_executive_data(field):
     if not os.path.exists(DATA_PATH): return pd.DataFrame()
     
-    # Aquí también ajustamos el CAST para evitar el error de strptime
     query = f"""
     WITH base AS (
         SELECT 
@@ -112,6 +120,7 @@ sel_tip = st.sidebar.multiselect("👥 Tipo Cliente", options=sorted(opt['tipo_c
 df_main = get_main_data(sel_reg, sel_suc, sel_prod, sel_tip)
 
 # --- 4. LÓGICA DE FILTRADO GLOBAL (IGNORAR MÁXIMO) ---
+df_fpd = pd.DataFrame()
 if not df_main.empty:
     max_c_real = df_main['cosecha_id'].max()
     df_fpd = df_main[df_main['cosecha_id'] < max_c_real].copy()
@@ -186,9 +195,18 @@ with tabs[0]:
         
         st.subheader(f"🏆 Rankings Sucursales - Cosecha {ult_c_id}")
         cr1, cr2 = st.columns(2)
-        conf_rank = {"sucursal": "Sucursal", "id_credito": f"Créditos {ult_c_id}", "id_credito_ant": f"Créditos {ant_c_id}", "fpd_num": st.column_config.NumberColumn(f"Casos FPD {ult_c_id}", format="%d"), "rate": st.column_config.NumberColumn(f"%FPD {ult_c_id}", format="%.2f%%"), "rate_ant": st.column_config.NumberColumn(f"%FPD {ant_c_id}", format="%.2f%%")}
-        cr1.markdown("**🔴 Top 10 Riesgo**"); cr1.dataframe(df_rf.sort_values('rate', ascending=False).head(10), column_config=conf_rank, hide_index=True, use_container_width=True)
-        cr2.markdown("**🟢 Bottom 10 Riesgo**"); cr2.dataframe(df_rf.sort_values('rate', ascending=True).head(10), column_config=conf_rank, hide_index=True, use_container_width=True)
+        conf_rank = {
+            "sucursal": "Sucursal", 
+            "id_credito": f"Créditos {ult_c_id}", 
+            "id_credito_ant": f"Créditos {ant_c_id}", 
+            "fpd_num": st.column_config.NumberColumn(f"Casos FPD {ult_c_id}", format="%d"), 
+            "rate": st.column_config.NumberColumn(f"%FPD {ult_c_id}", format="%.2f%%"), 
+            "rate_ant": st.column_config.NumberColumn(f"%FPD {ant_c_id}", format="%.2f%%")
+        }
+        cr1.markdown("**🔴 Top 10 Riesgo**")
+        cr1.dataframe(df_rf.sort_values('rate', ascending=False).head(10), column_config=conf_rank, hide_index=True, use_container_width=True)
+        cr2.markdown("**🟢 Bottom 10 Riesgo**")
+        cr2.dataframe(df_rf.sort_values('rate', ascending=True).head(10), column_config=conf_rank, hide_index=True, use_container_width=True)
 
 # --- TAB 2: RESUMEN EJECUTIVO ---
 with tabs[1]:
@@ -197,23 +215,31 @@ with tabs[1]:
         def render_exec_block(field, dim_label):
             df_e_raw = get_executive_data(field)
             df_e = df_e_raw[df_e_raw['cosecha_id'] < max_c_real].copy()
-            
             if not df_e.empty:
                 lista_c_e = sorted(df_e['cosecha_id'].unique())
-                u_e = lista_c_e[-1]; a_e = lista_c_e[-2] if len(lista_c_e) > 1 else u_e
-                m_u = MESES_NOMBRE.get(u_e[-2:]); m_a = MESES_NOMBRE.get(a_e[-2:])
+                u_e = lista_c_e[-1]
+                a_e = lista_c_e[-2] if len(lista_c_e) > 1 else u_e
+                m_u = MESES_NOMBRE.get(u_e[-2:])
+                m_a = MESES_NOMBRE.get(a_e[-2:])
                 df_u = df_e[df_e['cosecha_id'] == u_e].sort_values('fpd_rate')
                 df_a = df_e[df_e['cosecha_id'] == a_e].sort_values('fpd_rate')
                 
                 c1, c2 = st.columns(2)
-                c1.success(f"**{dim_label} Destacada:** La mejor es **{df_u.iloc[0]['dimension']}** con un **{df_u.iloc[0]['fpd_rate']:.2f}%** de FPD en **{m_u}**, mientras que en **{m_a}** fue **{df_a.iloc[0]['dimension']}** con un **{df_a.iloc[0]['fpd_rate']:.2f}%** de FPD.")
+                c1.success(f"**{dim_label} Destacada:** La mejor es **{df_u.iloc[0]['dimension']}** con un **{df_u.iloc[0]['fpd_rate']:.2f}%** de FPD en **{m_u}**, mientras que en **{m_a}** fue **{df_a.iloc[0]['dimension']}** con un **{df_a.iloc[0]['fpd_rate']:.2f}%**.")
                 c2.error(f"**{dim_label} Riesgosa:** La de mayor riesgo es **{df_u.iloc[-1]['dimension']}** con un **{df_u.iloc[-1]['fpd_rate']:.2f}%** en **{m_u}**, mientras que en **{m_a}** fue **{df_a.iloc[-1]['dimension']}** con un **{df_a.iloc[-1]['fpd_rate']:.2f}%**.")
                 
-                df_tab = pd.merge(df_u[['dimension', 'total_vol', 'fpd_si', 'fpd_rate']], df_a[['dimension', 'total_vol', 'fpd_si', 'fpd_rate']].rename(columns={'total_vol':'vol_ant','fpd_si':'fpd_ant','fpd_rate':'rate_ant'}), on='dimension', how='left')
+                df_tab = pd.merge(df_u[['dimension', 'total_vol', 'fpd_si', 'fpd_rate']], 
+                                  df_a[['dimension', 'total_vol', 'fpd_si', 'fpd_rate']].rename(columns={'total_vol':'vol_ant','fpd_si':'fpd_ant','fpd_rate':'rate_ant'}), 
+                                  on='dimension', how='left')
+                
                 st.dataframe(df_tab.style.background_gradient(subset=['fpd_rate','rate_ant'], cmap='YlOrRd').format({'fpd_rate':'{:.2f}%','rate_ant':'{:.2f}%','fpd_si':'{:,.0f}','fpd_ant':'{:,.0f}','total_vol':'{:,.0f}','vol_ant':'{:,.0f}'}),
-                             use_container_width=True, hide_index=True, column_config={"dimension":dim_label, "total_vol":f"Créditos {m_u.capitalize()}", "vol_ant":f"Créditos {m_a.capitalize()}", "fpd_si":f"Casos FPD {m_u.capitalize()}", "fpd_ant":f"Casos FPD {m_a.capitalize()}", "fpd_rate":f"%FPD {m_u.capitalize()}", "rate_ant":f"%FPD {m_a.capitalize()}"})
+                               use_container_width=True, hide_index=True, 
+                               column_config={"dimension":dim_label, "total_vol":f"Créditos {m_u.capitalize()}", "vol_ant":f"Créditos {m_a.capitalize()}", "fpd_si":f"Casos FPD {m_u.capitalize()}", "fpd_ant":f"Casos FPD {m_a.capitalize()}", "fpd_rate":f"%FPD {m_u.capitalize()}", "rate_ant":f"%FPD {m_a.capitalize()}"})
                 st.divider()
-        render_exec_block('unidad_regional', 'Regional'); render_exec_block('producto_agrupado', 'Producto'); render_exec_block('sucursal', 'Sucursal')
+        
+        render_exec_block('unidad_regional', 'Regional')
+        render_exec_block('producto_agrupado', 'Producto')
+        render_exec_block('sucursal', 'Sucursal')
 
 # --- TAB 3: INSIGHTS ESTRATÉGICOS ---
 with tabs[2]:
@@ -239,7 +265,8 @@ with tabs[2]:
         df_comp['rango'] = pd.cut(df_comp['monto_otorgado'], bins=bins, labels=labels, include_lowest=True)
         df_s = df_comp.groupby(['cosecha_id', 'rango'], observed=True).agg({'id_credito':'count', 'fpd_num':'sum'}).reset_index()
         df_s['%FPD'] = (df_s['fpd_num']*100/df_s['id_credito'])
-        df_u_m = df_s[df_s['cosecha_id'] == ult_c_id]; df_a_m = df_s[df_s['cosecha_id'] == ant_c_id]
+        df_u_m = df_s[df_s['cosecha_id'] == ult_c_id]
+        df_a_m = df_s[df_s['cosecha_id'] == ant_c_id]
         
         fig_combo = make_subplots(specs=[[{"secondary_y": True}]])
         fig_combo.add_trace(go.Bar(x=df_u_m['rango'], y=df_u_m['id_credito'], name=f"Créditos {mes_u_nombre}", marker_color='#2E86C1', text=df_u_m['id_credito'], textposition='auto'), secondary_y=False)
@@ -249,23 +276,13 @@ with tabs[2]:
         fig_combo.update_layout(plot_bgcolor='white', barmode='group', height=550, legend=LEGEND_BOTTOM)
         st.plotly_chart(fig_combo, use_container_width=True)
 
-# --- TAB 4: EXPORTAR (SOLO ÚLTIMAS 2 COSECHAS) ---
+# --- TAB 4: EXPORTAR ---
 with tabs[3]:
     if not df_main.empty:
         st.header("📥 Exportar Detalle FPD")
-        
-        # Obtenemos solo las últimas dos del archivo completo
         lista_export = sorted(df_main['cosecha_id'].unique(), reverse=True)[:2] 
-        
-        # El índice 1 en lista_export (que es descendente) es la penúltima
-        # Ponemos un pequeño chequeo por si solo hay una cosecha en el archivo
         idx_defecto = 1 if len(lista_export) > 1 else 0
-        
-        cosecha_export = st.selectbox(
-            "Selecciona la cosecha a exportar:", 
-            options=lista_export, 
-            index=idx_defecto # Selecciona por default la penúltima
-        )
+        cosecha_export = st.selectbox("Selecciona la cosecha a exportar:", options=lista_export, index=idx_defecto)
         
         df_exp = df_main[(df_main['cosecha_id'] == cosecha_export) & (df_main['fpd2'] == 'FPD')].copy()
         cols = ['id_credito', 'id_segmento', 'id_producto', 'producto_agrupado', 'origen2', 'cosecha_id', 'monto_otorgado', 'cuota', 'sucursal']
@@ -279,3 +296,13 @@ with tabs[3]:
             file_name=f'detalle_fpd_{cosecha_export}.csv', 
             mime='text/csv'
         )
+
+# --- 5. PIE DE PÁGINA ---
+st.divider()
+last_update = get_last_update()
+st.markdown(f"""
+    <div style='text-align: center; color: gray; font-size: 0.8em;'>
+        📅 <b>Última actualización de datos:</b> {last_update} (Hora México)<br>
+        © 2026 Monitor de Riesgo FPD - Dashboard Pro
+    </div>
+""", unsafe_allow_html=True)
