@@ -33,20 +33,17 @@ LEGEND_BOTTOM = dict(
 
 # --- FUNCIÓN DE PRECISIÓN PARA EL PARQUET ---
 def get_last_update():
-    try:
-        # Usamos Path para obtener una referencia absoluta al archivo de datos
-        archivo_data = Path(__file__).parent / DATA_PATH
-        
-        if archivo_data.exists():
-            # Obtenemos el tiempo de modificación del archivo físico
-            timestamp = archivo_data.stat().st_mtime
-            # Convertimos a datetime y ajustamos a México (UTC-6)
-            dt_mex = datetime.fromtimestamp(timestamp) - timedelta(hours=6)
-            return dt_mex.strftime("%d/%m/%Y %I:%M %p")
-        else:
-            return "Archivo .parquet no encontrado"
-    except Exception:
-        return "Error al leer metadatos"
+    # USAMOS LA RUTA ABSOLUTA DEL DIRECTORIO PARA EVITAR CONFUSIÓN CON EL SCRIPT
+    ruta_directorio = os.path.dirname(os.path.abspath(__file__))
+    archivo_parquet = os.path.join(ruta_directorio, DATA_PATH)
+    
+    if os.path.exists(archivo_parquet):
+        # Obtenemos el timestamp de modificación del archivo físico .parquet específicamente
+        mtime = os.path.getmtime(archivo_parquet)
+        # Ajuste a México (UTC-6)
+        dt_mex = datetime.fromtimestamp(mtime) - timedelta(hours=6)
+        return dt_mex.strftime("%d/%m/%Y %I:%M %p")
+    return "Archivo de datos no detectado"
 
 # --- 2. FUNCIONES DE DATOS ---
 
