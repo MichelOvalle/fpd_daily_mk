@@ -31,19 +31,24 @@ LEGEND_BOTTOM = dict(
     x=0.5
 )
 
-# --- FUNCIÓN DE PRECISIÓN PARA EL PARQUET ---
+# --- FUNCIÓN CON RUTA ABSOLUTA EXPLÍCITA ---
 def get_last_update():
-    # USAMOS LA RUTA ABSOLUTA DEL DIRECTORIO PARA EVITAR CONFUSIÓN CON EL SCRIPT
-    ruta_directorio = os.path.dirname(os.path.abspath(__file__))
-    archivo_parquet = os.path.join(ruta_directorio, DATA_PATH)
-    
-    if os.path.exists(archivo_parquet):
-        # Obtenemos el timestamp de modificación del archivo físico .parquet específicamente
-        mtime = os.path.getmtime(archivo_parquet)
-        # Ajuste a México (UTC-6)
-        dt_mex = datetime.fromtimestamp(mtime) - timedelta(hours=6)
-        return dt_mex.strftime("%d/%m/%Y %I:%M %p")
-    return "Archivo de datos no detectado"
+    try:
+        # Obtenemos el directorio actual de trabajo (Root del repo en el servidor)
+        base_path = Path.cwd() 
+        # Forzamos la ruta absoluta al archivo parquet
+        target_file = base_path / DATA_PATH
+        
+        if target_file.exists():
+            # Obtenemos la fecha de modificación del archivo físico
+            timestamp = target_file.stat().st_mtime
+            # Ajuste a México (UTC-6)
+            dt_mex = datetime.fromtimestamp(timestamp) - timedelta(hours=6)
+            return dt_mex.strftime("%d/%m/%Y %I:%M %p")
+        else:
+            return "Archivo no detectado en ruta absoluta"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 # --- 2. FUNCIONES DE DATOS ---
 
